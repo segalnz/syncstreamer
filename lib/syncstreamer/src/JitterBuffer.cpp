@@ -1,177 +1,108 @@
 #include "JitterBuffer.h"
-#include <Arduino.h>
 #include <string.h>
+#include <Arduino.h>
+
+// ── Globals ───────────────────────────────────────────────────────────────────
+static jb_frame_t*       s_ring      = nullptr;
+static SemaphoreHandle_t s_mutex     = nullptr;
+static uint32_t          s_read_head = 0;   // next frame_seq to consume
+static uint32_t          s_write_head = 0;  // one past highest frame_seq written
+
+static int64_t           s_last_write_us = 0;
+
+volatile uint32_t g_seq_gaps = 0;
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-bool JitterBuffer::init()
+bool jb_init(void)
 {
-    _mutex = xSemaphoreCreateMutex();
-    if (!_mutex) {
-        log_e("JitterBuffer: failed to create mutex");
+    s_mutex = xSemaphoreCreateMutex();
+    if (!s_mutex) {
+        log_e("JitterBuffer: mutex alloc failed");
         return false;
     }
 
-    // Pre-allocate contiguous PSRAM slab: one PCM slot per ring entry.
-    size_t slabBytes = JITTER_BUFFER_CAPACITY * JITTER_PCM_SLOT_BYTES;
-    _psramSlab = static_cast<int16_t*>(
-        heap_caps_malloc(slabBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (!_psramSlab) {
-        log_e("JitterBuffer: PSRAM alloc failed (%u bytes)", slabBytes);
+    size_t bytes = JB_FRAMES * sizeof(jb_frame_t);
+    s_ring = static_cast<jb_frame_t*>(
+        heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!s_ring) {
+        log_e("JitterBuffer: PSRAM alloc failed (%u KB)", (unsigned)(bytes / 1024));
         return false;
     }
 
-    // Wire each slot's pcm_data pointer into the slab.
-    for (size_t i = 0; i < JITTER_BUFFER_CAPACITY; i++) {
-        _slots[i].pcm_data  = _psramSlab + i * JITTER_MAX_SAMPLES * 2;
-        _slots[i].occupied  = false;
-    }
-
-    _resetStats();
-    log_i("JitterBuffer: %u slots, %u KB PSRAM", JITTER_BUFFER_CAPACITY, slabBytes / 1024);
+    memset(s_ring, 0, bytes);
+    log_i("JitterBuffer: %u frames, %u KB PSRAM", JB_FRAMES, (unsigned)(bytes / 1024));
     return true;
 }
 
-// ── Push ─────────────────────────────────────────────────────────────────────
-bool JitterBuffer::push(const SyncPacketHeader& hdr,
-                         const int16_t* pcm, uint32_t pcmWordCount)
+// ── Write ─────────────────────────────────────────────────────────────────────
+void jb_write(uint32_t frame_seq, const int16_t pcm[2])
 {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
+    uint32_t idx = frame_seq & JB_MASK;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
 
-    // First packet: establish stream context.
-    if (!_streamActive) {
-        _currentStream = hdr.stream_id;
-        _nextPopSeq    = hdr.sequence;
-        _streamActive  = true;
+    s_ring[idx].pcm[0] = pcm[0];
+    s_ring[idx].pcm[1] = pcm[1];
+    s_ring[idx].valid  = true;
+
+    // Advance write head to one past the highest seq written.
+    uint32_t next = frame_seq + 1u;
+    if ((int32_t)(next - s_write_head) > 0) {
+        s_write_head = next;
     }
 
-    // Stream-id change: flush and restart.
-    if (hdr.stream_id != _currentStream) {
-        xSemaphoreGive(_mutex);
-        flush(hdr.stream_id);
-        xSemaphoreTake(_mutex, portMAX_DELAY);
-    }
-
-    // Drop if older than next expected pop (late packet).
-    if ((int32_t)(hdr.sequence - _nextPopSeq) < 0) {
-        statDropLate++;
-        xSemaphoreGive(_mutex);
-        return false;
-    }
-
-    size_t idx = hdr.sequence % JITTER_BUFFER_CAPACITY;
-
-    // Slot already occupied — either duplicate or we're overflowing the window.
-    if (_slots[idx].occupied) {
-        if (_slots[idx].sequence == hdr.sequence) {
-            statDropDuplicate++;
-        } else {
-            statDropOverflow++;
-        }
-        xSemaphoreGive(_mutex);
-        return false;
-    }
-
-    // Copy PCM into pre-allocated PSRAM slot.
-    uint32_t copyWords = (pcmWordCount < JITTER_MAX_SAMPLES * 2u)
-                         ? pcmWordCount : JITTER_MAX_SAMPLES * 2u;
-    memcpy(_slots[idx].pcm_data, pcm, copyWords * sizeof(int16_t));
-
-    _slots[idx].stream_id            = hdr.stream_id;
-    _slots[idx].sequence             = hdr.sequence;
-    _slots[idx].presentation_time_us = hdr.presentation_time_us;
-    _slots[idx].sample_count         = hdr.sample_count;
-    _slots[idx].flags                = hdr.flags;
-    _slots[idx].occupied             = true;
-
-    statPushOk++;
-    xSemaphoreGive(_mutex);
-    return true;
-}
-
-// ── Pop ───────────────────────────────────────────────────────────────────────
-bool JitterBuffer::pop(PCMBlock& out)
-{
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-
-    size_t idx = _nextPopSeq % JITTER_BUFFER_CAPACITY;
-
-    if (!_streamActive || !_slots[idx].occupied) {
-        statUnderrun++;
-        xSemaphoreGive(_mutex);
-        return false;
-    }
-
-    out = _slots[idx];   // shallow copy — pcm_data still points into slab
-    // Slot stays occupied until release() is called.
-    _nextPopSeq++;
-    statPopOk++;
-
-    xSemaphoreGive(_mutex);
-    return true;
-}
-
-// ── Release ───────────────────────────────────────────────────────────────────
-void JitterBuffer::release(const PCMBlock& block)
-{
-    size_t idx = block.sequence % JITTER_BUFFER_CAPACITY;
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    _slots[idx].occupied = false;
-    xSemaphoreGive(_mutex);
-}
-
-// ── Flush ─────────────────────────────────────────────────────────────────────
-void JitterBuffer::flush(uint32_t new_stream_id)
-{
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-
-    for (size_t i = 0; i < JITTER_BUFFER_CAPACITY; i++) {
-        _slots[i].occupied = false;
-    }
-    _currentStream = new_stream_id;
-    _nextPopSeq    = 0;
-    _streamActive  = false;
-    _resetStats();
-
-    log_i("JitterBuffer: flushed, new stream_id=%u", new_stream_id);
-    xSemaphoreGive(_mutex);
-}
-
-// ── Fill level ────────────────────────────────────────────────────────────────
-int64_t JitterBuffer::getFillLevelMicros() const
-{
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-
-    uint32_t count = 0;
-    for (size_t i = 0; i < JITTER_BUFFER_CAPACITY; i++) {
-        if (_slots[i].occupied) count++;
-    }
-
-    xSemaphoreGive(_mutex);
-
-    // Nominal block duration derived from SYNC_PACKET_MAX_SAMPLES (240 @ 48 kHz = 5 000 µs)
-    return (int64_t)count * SYNC_PACKET_BLOCK_DURATION_US;
+    s_last_write_us = esp_timer_get_time();
+    xSemaphoreGive(s_mutex);
 }
 
 // ── Peek ──────────────────────────────────────────────────────────────────────
-bool JitterBuffer::peekNextPresentationTime(int64_t& out_time_us) const
+jb_frame_t* jb_peek(void)
 {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-
-    size_t idx = _nextPopSeq % JITTER_BUFFER_CAPACITY;
-    bool ok = _streamActive && _slots[idx].occupied;
-    if (ok) out_time_us = _slots[idx].presentation_time_us;
-
-    xSemaphoreGive(_mutex);
-    return ok;
+    // Called from audio_out_task; no mutex (read_head only moves in same task).
+    uint32_t idx = s_read_head & JB_MASK;
+    if (!s_ring[idx].valid) return nullptr;
+    return &s_ring[idx];
 }
 
-// ── Private ───────────────────────────────────────────────────────────────────
-void JitterBuffer::_resetStats()
+// ── Advance ───────────────────────────────────────────────────────────────────
+void jb_advance(void)
 {
-    statPushOk        = 0;
-    statDropLate      = 0;
-    statDropDuplicate = 0;
-    statDropOverflow  = 0;
-    statPopOk         = 0;
-    statUnderrun      = 0;
+    uint32_t idx = s_read_head & JB_MASK;
+    s_ring[idx].valid = false;
+    s_read_head++;
+}
+
+// ── Occupancy ─────────────────────────────────────────────────────────────────
+uint32_t jb_occupancy_frames(void)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint32_t occ = s_write_head - s_read_head;
+    xSemaphoreGive(s_mutex);
+    if (occ > JB_FRAMES) occ = JB_FRAMES;
+    return occ;
+}
+
+uint32_t jb_occupancy_ms(void)
+{
+    return (jb_occupancy_frames() * 1000u) / JB_SAMPLE_RATE;
+}
+
+// ── Flush ─────────────────────────────────────────────────────────────────────
+void jb_flush(void)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    for (uint32_t i = 0; i < JB_FRAMES; i++) {
+        s_ring[i].valid = false;
+    }
+    s_read_head  = 0;
+    s_write_head = 0;
+    s_last_write_us = 0;
+    xSemaphoreGive(s_mutex);
+    log_i("JitterBuffer: flushed");
+}
+
+// ── Stall detection ───────────────────────────────────────────────────────────
+bool jb_stalled(void)
+{
+    if (s_last_write_us == 0) return false;
+    return (esp_timer_get_time() - s_last_write_us) > JB_STALL_US;
 }

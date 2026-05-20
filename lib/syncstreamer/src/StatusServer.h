@@ -1,44 +1,26 @@
 #pragma once
 #include <stdint.h>
 #include <ESPAsyncWebServer.h>
-#include "NTPSync.h"
-#include "JitterBuffer.h"
-#include "NetworkReceiver.h"
-#include "AudioOutput.h"
-#include "PlaybackScheduler.h"
-#include "SyncController.h"
+#include <PubSubClient.h>
+#include <WiFiClient.h>
 
 // ============================================================
-// StatusServer — async web status/config UI + ElegantOTA entry
+// StatusServer v2 — web dashboard + ElegantOTA + MQTT publisher
 //
 // Routes:
-//   GET  /           colourful single-page status dashboard
-//   GET  /api/status JSON snapshot (fetched every 2 s by page JS)
-//   POST /api/config update runtime parameters
-//   GET  /update     ElegantOTA firmware update (registered externally)
-//
-// Call begin() after AsyncWebServer is created; the server's
-// begin() call is made in main.cpp after all routes are set up.
+//   GET  /           colourful dark-theme SPA dashboard
+//   GET  /api/status JSON snapshot (fetched every 2s by page JS)
+//   POST /api/config update target_fill_ms, mode
+//   /update          ElegantOTA (registered by ElegantOTA.begin())
 // ============================================================
 
-class StatusServer {
-public:
-    void begin(AsyncWebServer*   server,
-               NTPSync*          ntp,
-               JitterBuffer*     jbuf,
-               NetworkReceiver*  net,
-               AudioOutput*      audio,
-               PlaybackScheduler* sched,
-               SyncController*   sync);
+#define MQTT_BROKER   "192.168.5.160"
+#define MQTT_PORT     1883
+#define MQTT_INTERVAL_MS 2000u
 
-private:
-    NTPSync*           _ntp   = nullptr;
-    JitterBuffer*      _jbuf  = nullptr;
-    NetworkReceiver*   _net   = nullptr;
-    AudioOutput*       _audio = nullptr;
-    PlaybackScheduler* _sched = nullptr;
-    SyncController*    _sync  = nullptr;
+// Initialise web routes, MQTT client. Call after WiFi is connected.
+// server must already be constructed; server.begin() called here.
+void status_server_init(AsyncWebServer* server);
 
-    void _handleStatus(AsyncWebServerRequest* req);
-    void _handleConfig(AsyncWebServerRequest* req);
-};
+// Call from loop() — drives ElegantOTA and MQTT keep-alive + publish.
+void status_server_loop(AsyncWebServer* server);

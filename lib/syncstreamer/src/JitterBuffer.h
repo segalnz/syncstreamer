@@ -2,86 +2,62 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include "SyncPacket.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "esp_timer.h"
 #include "esp_heap_caps.h"
 
 // ============================================================
-// JitterBuffer — thread-safe ring buffer of PCM audio blocks
+// JitterBuffer v2 — sequence-indexed elastic audio buffer in PSRAM
 //
-// Capacity: JITTER_BUFFER_CAPACITY blocks.
-// At 480 samples/block (10 ms @ 48 kHz) that gives ~1280 ms.
+// Ring of JB_FRAMES stereo frames indexed by (frame_seq & (JB_FRAMES-1)).
+// frame_seq = packet_seq * SYNC_FRAMES_PER_PACKET + frame_offset
 //
-// PCM payload memory is pre-allocated in PSRAM at init().
-// Metadata lives in internal RAM.
-//
-// Indexed by (sequence % JITTER_BUFFER_CAPACITY): O(1) push/pop.
-// Late and duplicate packets are silently dropped.
-//
-// Call init() before use.
+// Capacity: 8192 frames = ~170 ms @ 48 kHz
+// Target fill: JB_TARGET_MS = 60 ms
+// Startup fill: JB_STARTUP_MS = 200 ms (used during ST_ACQUIRING)
 // ============================================================
 
-static constexpr size_t JITTER_BUFFER_CAPACITY  = 256;   // blocks (~1280 ms)
-static constexpr size_t JITTER_MAX_SAMPLES       = SYNC_PACKET_MAX_SAMPLES;
-// bytes per slot: stereo 16-bit worst case
-static constexpr size_t JITTER_PCM_SLOT_BYTES    = JITTER_MAX_SAMPLES * 2 * sizeof(int16_t);
+#define JB_FRAMES        8192u          // must be power of 2
+#define JB_MASK          (JB_FRAMES - 1)
+#define JB_SAMPLE_RATE   48000u
+#define JB_TARGET_MS     60u
+#define JB_STARTUP_MS    200u
+#define JB_TARGET_FRAMES ((JB_SAMPLE_RATE * JB_TARGET_MS)  / 1000u)   // 2880
+#define JB_STARTUP_FRAMES ((JB_SAMPLE_RATE * JB_STARTUP_MS) / 1000u)  // 9600
+#define JB_STALL_US      500000LL       // 500 ms without a new frame = stalled
 
-struct PCMBlock {
-    uint32_t stream_id;
-    uint32_t sequence;
-    int64_t  presentation_time_us;
-    uint16_t sample_count;          // stereo pairs (or mono samples if MONO flag)
-    uint16_t flags;
-    int16_t* pcm_data;              // points into PSRAM slab; owned by JitterBuffer
-    bool     occupied;
+struct jb_frame_t {
+    int16_t pcm[2];   // [0]=L, [1]=R
+    bool    valid;
 };
 
-class JitterBuffer {
-public:
-    // Allocate PSRAM slab and init mutex. Returns false on alloc failure.
-    bool init();
+// Must be called once before any other jb_ function.
+// Allocates ring in PSRAM. Returns false on failure.
+bool jb_init(void);
 
-    // Copy a received packet into the buffer.
-    // Returns false if the packet is late, duplicate, or the slot is still
-    // occupied (overflow — caller should log and discard).
-    bool push(const SyncPacketHeader& hdr, const int16_t* pcm, uint32_t pcmWordCount);
+// Write one stereo frame at the given absolute frame sequence number.
+void jb_write(uint32_t frame_seq, const int16_t pcm[2]);
 
-    // Retrieve the oldest pending block (lowest sequence not yet popped).
-    // Fills *out and returns true if a block is ready; false if empty.
-    // Caller MUST call release() when done with the PCM data.
-    bool pop(PCMBlock& out);
+// Peek at the frame at read_head without advancing. Returns pointer into ring
+// (valid until next jb_write to the same slot, i.e. after 8192 frames).
+// Returns nullptr if the slot is not valid.
+jb_frame_t* jb_peek(void);
 
-    // Return the slot occupied by *block back to the pool after pop().
-    void release(const PCMBlock& block);
+// Advance read head by one frame (call after consuming jb_peek result).
+void jb_advance(void);
 
-    // Discard all blocks for a stream whose stream_id differs from current.
-    // Call when a new stream begins.
-    void flush(uint32_t new_stream_id);
+// Frames currently between read_head and write_head (saturates to JB_FRAMES).
+uint32_t jb_occupancy_frames(void);
 
-    // Buffer fill expressed as microseconds of audio queued.
-    int64_t getFillLevelMicros() const;
+// Occupancy in milliseconds.
+uint32_t jb_occupancy_ms(void);
 
-    // Peek at the presentation_time_us of the next block to be popped
-    // without removing it. Returns false if the buffer is empty.
-    bool peekNextPresentationTime(int64_t& out_time_us) const;
+// Discard all frames and reset heads. Call on stream start/reacquire.
+void jb_flush(void);
 
-    // ── Stats (reset on flush) ────────────────────────────────
-    uint32_t statPushOk;
-    uint32_t statDropLate;
-    uint32_t statDropDuplicate;
-    uint32_t statDropOverflow;
-    uint32_t statPopOk;
-    uint32_t statUnderrun;
+// Returns true if no jb_write has occurred in the last JB_STALL_US microseconds.
+bool jb_stalled(void);
 
-private:
-    PCMBlock         _slots[JITTER_BUFFER_CAPACITY];
-    int16_t*         _psramSlab  = nullptr;   // contiguous PSRAM allocation
-    SemaphoreHandle_t _mutex      = nullptr;
-
-    uint32_t _nextPopSeq   = 0;   // next sequence number expected by pop()
-    uint32_t _currentStream = 0;
-    bool     _streamActive  = false;
-
-    void _resetStats();
-};
+// Sequence gap counter (incremented by NetworkReceiver on missing sequence).
+extern volatile uint32_t g_seq_gaps;

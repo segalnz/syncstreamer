@@ -1,217 +1,248 @@
 #include "StatusServer.h"
+#include "SyncController.h"
+#include "JitterBuffer.h"
+#include "OffsetEstimator.h"
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ElegantOTA.h>
+#include <esp_mac.h>
 #include <stdio.h>
+#include <string.h>
 
-// ── HTML page (served once; JS polls /api/status every 2 s) ──────────────────
+// ── MQTT ──────────────────────────────────────────────────────────────────────
+static WiFiClient    s_wifi_client;
+static PubSubClient  s_mqtt(s_wifi_client);
+static char          s_node_id[20];
+static char          s_mqtt_topic[48];
+static uint32_t      s_last_mqtt_ms = 0;
+
+// ── Config adjustable via /api/config ────────────────────────────────────────
+static volatile uint32_t s_target_fill_ms = JB_TARGET_MS;   // mirrors JB_TARGET_MS
+
+// ── Dashboard HTML ────────────────────────────────────────────────────────────
 static const char PAGE_HTML[] PROGMEM = R"rawhtml(<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SyncStreamer</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d1117;color:#c9d1d9;font-family:monospace;padding:1rem}
-h1{color:#58a6ff;border-bottom:1px solid #30363d;padding-bottom:.5rem;margin-bottom:1rem;font-size:1.3rem}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:.8rem;margin-bottom:1rem}
+body{background:#0d1117;color:#c9d1d9;font-family:'Courier New',monospace;padding:1.2rem}
+h1{color:#58a6ff;border-bottom:1px solid #30363d;padding-bottom:.5rem;margin-bottom:1.2rem;font-size:1.4rem;letter-spacing:.05em}
+.badge{display:inline-block;padding:.25rem .7rem;border-radius:20px;font-weight:bold;font-size:.85rem;margin-left:.6rem;vertical-align:middle}
+.b-idle{background:#30363d;color:#8b949e}
+.b-acquiring{background:#5a4000;color:#e3b341}
+.b-locked{background:#0d3621;color:#3fb950}
+.b-recovering{background:#5a2e00;color:#ffa657}
+.b-reacquiring{background:#4d1c1c;color:#f85149}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.8rem;margin-bottom:1rem}
 .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:.9rem;border-top-width:3px}
-.card h2{font-size:.75rem;text-transform:uppercase;letter-spacing:.12em;margin-bottom:.6rem}
-.net{border-top-color:#58a6ff}.net h2{color:#58a6ff}
-.tim{border-top-color:#3fb950}.tim h2{color:#3fb950}
-.str{border-top-color:#f78166}.str h2{color:#f78166}
-.syn{border-top-color:#d2a8ff}.syn h2{color:#d2a8ff}
-.aud{border-top-color:#ffa657}.aud h2{color:#ffa657}
-.pkt{border-top-color:#79c0ff}.pkt h2{color:#79c0ff}
-.row{display:flex;justify-content:space-between;padding:.18rem 0;border-bottom:1px solid #21262d;font-size:.82rem}
+.card h2{font-size:.72rem;text-transform:uppercase;letter-spacing:.12em;margin-bottom:.6rem;opacity:.8}
+.c1{border-top-color:#58a6ff}.c1 h2{color:#58a6ff}
+.c2{border-top-color:#3fb950}.c2 h2{color:#3fb950}
+.c3{border-top-color:#ffa657}.c3 h2{color:#ffa657}
+.c4{border-top-color:#d2a8ff}.c4 h2{color:#d2a8ff}
+.row{display:flex;justify-content:space-between;padding:.18rem 0;border-bottom:1px solid #21262d;font-size:.81rem}
 .row:last-child{border-bottom:none}.val{font-weight:bold}
 .ok{color:#3fb950}.warn{color:#e3b341}.err{color:#f85149}
-.bar-bg{background:#21262d;border-radius:3px;height:5px;margin-top:.5rem}
-.bar-fg{height:5px;border-radius:3px;transition:width .4s}
+.bar-bg{background:#21262d;border-radius:4px;height:8px;margin-top:.5rem;overflow:hidden}
+.bar-fg{height:8px;border-radius:4px;transition:width .5s ease}
 .cfg{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:.9rem;margin-bottom:.8rem;border-top:3px solid #e3b341}
-.cfg h2{color:#e3b341;font-size:.75rem;text-transform:uppercase;letter-spacing:.12em;margin-bottom:.7rem}
-label{font-size:.82rem;margin-right:1.2rem}
-input[type=number]{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:.25rem .4rem;width:75px;margin:0 .3rem}
-.btn{border:none;border-radius:5px;padding:.35rem .8rem;cursor:pointer;font-size:.82rem;margin-right:.4rem;color:#fff}
+.cfg h2{color:#e3b341;font-size:.72rem;text-transform:uppercase;letter-spacing:.12em;margin-bottom:.7rem}
+label{font-size:.82rem;margin-right:1rem;display:inline-flex;align-items:center;gap:.3rem}
+select,input[type=number]{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:.25rem .4rem}
+input[type=number]{width:80px}
+.btn{border:none;border-radius:5px;padding:.38rem .9rem;cursor:pointer;font-size:.82rem;margin-right:.4rem;color:#fff;font-family:inherit}
 .apply{background:#238636}.apply:hover{background:#2ea043}
 .ota{background:#1f6feb}.ota:hover{background:#388bfd}
-#ts{font-size:.72rem;color:#484f58;margin-top:.5rem}
+#ts{font-size:.7rem;color:#484f58;margin-top:.5rem}
 </style></head>
 <body>
-<h1>&#x1F50A; SyncStreamer &nbsp;<span id="ip" style="font-size:.65em;color:#484f58"></span></h1>
+<h1>&#x1F50A; SyncStreamer <span id="statebadge" class="badge b-idle">IDLE</span>
+  <span id="duckbadge"></span>
+  <span style="font-size:.55em;color:#484f58;float:right;margin-top:.4rem" id="ipspan"></span>
+</h1>
 <div class="grid">
-  <div class="card net"><h2>Network</h2><div id="d_net"></div></div>
-  <div class="card tim"><h2>Time / NTP</h2><div id="d_time"></div></div>
-  <div class="card str"><h2>Stream</h2><div id="d_str"></div></div>
-  <div class="card syn"><h2>Sync</h2><div id="d_syn"></div></div>
-  <div class="card aud"><h2>Audio</h2><div id="d_aud"></div></div>
-  <div class="card pkt"><h2>Packets</h2><div id="d_pkt"></div></div>
+  <div class="card c1"><h2>&#x1F4F6; Network</h2><div id="d_net"></div></div>
+  <div class="card c2"><h2>&#x1F9EE; Buffer</h2><div id="d_buf"></div></div>
+  <div class="card c3"><h2>&#x23F1; PLL / Rate</h2><div id="d_pll"></div></div>
+  <div class="card c4"><h2>&#x1F4E1; Stats</h2><div id="d_stat"></div></div>
 </div>
 <div class="cfg">
-  <h2>Configuration</h2>
+  <h2>&#x2699; Configuration</h2>
   <form id="cfgform">
-    <label>Startup fill<input type="number" name="startup_min_ms" id="c_stup" min="100" max="2000">ms</label>
-    <label>Duck level<input type="number" name="duck_level_pct" id="c_duck" min="0" max="50">%</label>
+    <label>Mode
+      <select name="mode" id="c_mode">
+        <option value="music">Music</option>
+        <option value="tts">TTS</option>
+      </select>
+    </label>
+    <label>Target fill <input type="number" name="target_fill_ms" id="c_fill" min="20" max="500">ms</label>
     <button class="btn apply" type="submit">Apply</button>
     <button class="btn ota" type="button" onclick="location='/update'">&#x1F504; OTA Update</button>
   </form>
 </div>
 <div id="ts">Connecting...</div>
 <script>
+const STATES={0:'IDLE',1:'ACQUIRING',2:'LOCKED',3:'RECOVERING',4:'REACQUIRING'};
+const BCLASS={0:'b-idle',1:'b-acquiring',2:'b-locked',3:'b-recovering',4:'b-reacquiring'};
 function row(l,v,c=''){return`<div class="row"><span>${l}</span><span class="val ${c}">${v}</span></div>`}
-function bar(pct,col='#58a6ff'){return`<div class="bar-bg"><div class="bar-fg" style="width:${Math.min(Math.max(pct,0),100)}%;background:${col}"></div></div>`}
-function cls(v,ok,warn){return v<=ok?'ok':v<=warn?'warn':'err'}
+function bar(pct,col){return`<div class="bar-bg"><div class="bar-fg" style="width:${Math.min(Math.max(pct,0),100)}%;background:${col}"></div></div>`}
+function rclr(rssi){return rssi>=-65?'ok':rssi>=-80?'warn':'err'}
 function update(){
   fetch('/api/status').then(r=>r.json()).then(d=>{
-    document.getElementById('ip').textContent='['+d.wifi.ip+']';
+    // Header
+    const sb=document.getElementById('statebadge');
+    sb.textContent=STATES[d.state]??d.state;
+    sb.className='badge '+(BCLASS[d.state]??'b-idle');
+    document.getElementById('ipspan').textContent=d.ip;
+    const db=document.getElementById('duckbadge');
+    db.innerHTML=d.ducked?'<span class="badge" style="background:#4d1c1c;color:#f85149">DUCK</span>':'';
+    // Network
     document.getElementById('d_net').innerHTML=
-      row('SSID',d.wifi.ssid)+
-      row('RSSI',d.wifi.rssi+' dBm',cls(-d.wifi.rssi,70,85))+
-      row('IP',d.wifi.ip);
-    document.getElementById('d_time').innerHTML=
-      row('NTP synced',d.ntp.synced?'YES':'NO',d.ntp.synced?'ok':'err')+
-      row('Last sync',d.ntp.last_sync_age_sec<4294967295?d.ntp.last_sync_age_sec+'s ago':'never',
-          cls(d.ntp.last_sync_age_sec,60,300));
-    const fill=d.stream.fill_ms;
-    document.getElementById('d_str').innerHTML=
-      row('State','<b>'+d.stream.state+'</b>')+
-      row('Stream ID',d.stream.stream_id)+
-      row('Buffer fill',fill+' ms')+bar(fill/120*100,'#f78166');
-    const fe=Math.abs(d.sync.filtered_us);
-    document.getElementById('d_syn').innerHTML=
-      row('Phase error',d.sync.phase_us+' µs')+
-      row('Filtered',d.sync.filtered_us+' µs',cls(fe,500,2000))+
-      row('Slips +/&minus;',d.sync.slips_insert+' / '+d.sync.slips_drop);
-    const dc=d.audio.ducked;
-    document.getElementById('d_aud').innerHTML=
-      row('Volume',d.audio.volume_pct+'%')+
-      row('Duck state',dc?'DUCKED':'normal',dc?'warn':'')+
-      row('Samples out',d.audio.samples_written.toLocaleString())+
-      bar(d.audio.volume_pct,'#ffa657');
-    document.getElementById('d_pkt').innerHTML=
-      row('RX packets',d.packets.rx_ok)+
-      row('Parse errors',d.packets.parse_err,d.packets.parse_err?'err':'')+
-      row('JB push ok',d.packets.jb_push_ok)+
-      row('JB late drops',d.packets.jb_drop_late,d.packets.jb_drop_late?'warn':'')+
-      row('Underruns',d.packets.sched_underrun,d.packets.sched_underrun?'warn':'');
-    document.getElementById('c_stup').value=d.config.startup_min_ms;
-    document.getElementById('c_duck').value=d.config.duck_level_pct;
+      row('SSID',d.ssid)+row('RSSI',d.rssi+' dBm',rclr(d.rssi))+row('Uptime',d.uptime_s+'s');
+    // Buffer
+    const fp=Math.round(d.fill_ms/(d.target_ms||60)*100);
+    const bc=d.state===2?'#3fb950':d.state===3?'#ffa657':'#e3b341';
+    document.getElementById('d_buf').innerHTML=
+      row('Fill',d.fill_ms+' ms')+
+      row('Target',d.target_ms+' ms')+
+      row('Seq gaps',d.seq_gaps,d.seq_gaps?'warn':'')+
+      bar(fp,bc);
+    // PLL
+    const ac=Math.abs(d.rate_ppm)<50?'ok':Math.abs(d.rate_ppm)<150?'warn':'err';
+    document.getElementById('d_pll').innerHTML=
+      row('Rate PPM',(d.rate_ppm>=0?'+':'')+d.rate_ppm.toFixed(1),ac)+
+      row('Filtered err',d.filtered_err.toFixed(1)+' fr')+
+      row('Offset',d.offset_us+'&thinsp;µs')+
+      row('Mode',d.mode.toUpperCase());
+    // Stats
+    document.getElementById('d_stat').innerHTML=
+      row('Occupancy',d.occ_frames+' fr')+
+      row('Stalled',d.stalled?'YES':'no',d.stalled?'err':'');
+    // Config
+    document.getElementById('c_mode').value=d.mode;
+    document.getElementById('c_fill').value=d.target_ms;
     document.getElementById('ts').textContent='Updated: '+new Date().toLocaleTimeString();
-  }).catch(()=>{document.getElementById('ts').textContent='&#x26A0; Connection lost';});
+  }).catch(()=>{document.getElementById('ts').textContent='\u26A0 Connection lost';});
 }
 document.getElementById('cfgform').addEventListener('submit',e=>{
   e.preventDefault();
-  const fd=new FormData(e.target);
-  fetch('/api/config',{method:'POST',body:new URLSearchParams(fd)}).then(()=>update());
+  fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams(new FormData(e.target)).toString()}).then(()=>update());
 });
 update();setInterval(update,2000);
-</script>
-</body></html>
+</script></body></html>
 )rawhtml";
 
-// ── Begin ─────────────────────────────────────────────────────────────────────
-void StatusServer::begin(AsyncWebServer*   server,
-                          NTPSync*          ntp,
-                          JitterBuffer*     jbuf,
-                          NetworkReceiver*  net,
-                          AudioOutput*      audio,
-                          PlaybackScheduler* sched,
-                          SyncController*   sync)
+// ── Init ──────────────────────────────────────────────────────────────────────
+void status_server_init(AsyncWebServer* server)
 {
-    _ntp   = ntp;
-    _jbuf  = jbuf;
-    _net   = net;
-    _audio = audio;
-    _sched = sched;
-    _sync  = sync;
+    // Build node-id and MQTT topic from MAC address.
+    uint8_t mac[6];
+    esp_efuse_mac_get_default(mac);
+    snprintf(s_node_id,  sizeof(s_node_id),  "%02x%02x%02x", mac[3], mac[4], mac[5]);
+    snprintf(s_mqtt_topic, sizeof(s_mqtt_topic), "speaker/%s/status", s_node_id);
 
+    // MQTT
+    s_mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+    s_mqtt.setBufferSize(256);
+
+    // Routes
     server->on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
-        req->send_P(200, "text/html", PAGE_HTML);
+        req->send(200, "text/html", reinterpret_cast<const char*>(PAGE_HTML));
     });
 
-    server->on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
-        _handleStatus(req);
+    server->on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
+        const char* state_name[] = {"idle","acquiring","locked","recovering","reacquiring"};
+        const char* mode_str = (g_mode == MODE_TTS) ? "tts" : "music";
+        int  sn = (int)g_state;
+        if (sn < 0 || sn > 4) sn = 0;
+
+        char buf[512];
+        snprintf(buf, sizeof(buf),
+            "{"
+            "\"state\":%d,\"ip\":\"%s\",\"ssid\":\"%s\","
+            "\"rssi\":%d,\"uptime_s\":%lu,"
+            "\"fill_ms\":%u,\"target_ms\":%u,\"occ_frames\":%u,"
+            "\"rate_ppm\":%.2f,\"filtered_err\":%.2f,"
+            "\"offset_us\":%lld,\"seq_gaps\":%u,"
+            "\"ducked\":%s,\"stalled\":%s,\"mode\":\"%s\""
+            "}",
+            sn,
+            WiFi.localIP().toString().c_str(),
+            WiFi.SSID().c_str(),
+            WiFi.RSSI(),
+            (unsigned long)(esp_timer_get_time() / 1000000ULL),
+            jb_occupancy_ms(),
+            s_target_fill_ms,
+            jb_occupancy_frames(),
+            (float)g_rate_ppm,
+            (float)g_filtered_err,
+            g_offset_us,
+            g_seq_gaps,
+            g_ducked  ? "true" : "false",
+            jb_stalled() ? "true" : "false",
+            mode_str
+        );
+        req->send(200, "application/json", buf);
     });
 
-    server->on("/api/config", HTTP_POST, [this](AsyncWebServerRequest* req) {
-        _handleConfig(req);
-    });
-
-    log_i("StatusServer: routes registered");
-}
-
-// ── /api/status ───────────────────────────────────────────────────────────────
-void StatusServer::_handleStatus(AsyncWebServerRequest* req)
-{
-    const SyncStatus& ss = _sync->getStatus();
-
-    const char* stateStr = "FILLING";
-    switch (_sched->getState()) {
-        case SchedulerState::PLAYING:   stateStr = "PLAYING";   break;
-        case SchedulerState::RESETTING: stateStr = "RESETTING"; break;
-        default: break;
-    }
-
-    char buf[768];
-    snprintf(buf, sizeof(buf),
-        "{"
-        "\"wifi\":{\"rssi\":%d,\"ip\":\"%s\",\"ssid\":\"%s\"},"
-        "\"ntp\":{\"synced\":%s,\"last_sync_age_sec\":%u},"
-        "\"stream\":{\"state\":\"%s\",\"stream_id\":%u,\"fill_ms\":%lld},"
-        "\"sync\":{\"phase_us\":%lld,\"filtered_us\":%lld,"
-                  "\"slips_insert\":%d,\"slips_drop\":%d},"
-        "\"audio\":{\"volume_pct\":%d,\"ducked\":%s,\"samples_written\":%u},"
-        "\"packets\":{\"rx_ok\":%u,\"parse_err\":%u,\"push_fail\":%u,"
-                     "\"jb_push_ok\":%u,\"jb_drop_late\":%u,"
-                     "\"jb_drop_dup\":%u,\"jb_drop_overflow\":%u,"
-                     "\"jb_underrun\":%u,\"sched_underrun\":%u},"
-        "\"config\":{\"startup_min_ms\":%u,\"duck_level_pct\":%d}"
-        "}",
-        WiFi.RSSI(),
-        WiFi.localIP().toString().c_str(),
-        WiFi.SSID().c_str(),
-        _ntp->isSynced() ? "true" : "false",
-        _ntp->getLastSyncAgeSec(),
-        stateStr,
-        _sched->getCurrentStreamId(),
-        _jbuf->getFillLevelMicros() / 1000LL,
-        ss.phaseErrorUs,
-        ss.filteredErrorUs,
-        ss.totalSlipsInserted,
-        ss.totalSlipsDropped,
-        _audio->getCurrentVolumePercent(),
-        _audio->isDucked() ? "true" : "false",
-        _audio->getSamplesWritten(),
-        _net->statPacketsReceived,
-        _net->statParseErrors,
-        _net->statPushFailed,
-        _jbuf->statPushOk,
-        _jbuf->statDropLate,
-        _jbuf->statDropDuplicate,
-        _jbuf->statDropOverflow,
-        _jbuf->statUnderrun,
-        _sched->statUnderruns,
-        _sched->getStartupMinMs(),
-        _audio->getDuckLevelPercent()
+    server->on("/api/config", HTTP_POST,
+        [](AsyncWebServerRequest* req) {
+            if (req->hasParam("target_fill_ms", true)) {
+                uint32_t v = (uint32_t)req->getParam("target_fill_ms", true)->value().toInt();
+                if (v >= 20 && v <= 500) {
+                    s_target_fill_ms = v;
+                    log_i("StatusServer: target_fill_ms=%u", v);
+                }
+            }
+            if (req->hasParam("mode", true)) {
+                String m = req->getParam("mode", true)->value();
+                g_mode = (m == "tts") ? MODE_TTS : MODE_MUSIC;
+                log_i("StatusServer: mode=%s", m.c_str());
+            }
+            req->send(200, "text/plain", "OK");
+        }
     );
 
-    req->send(200, "application/json", buf);
+    ElegantOTA.begin(server);
+    server->begin();
+    log_i("StatusServer: listening — node_id=%s mqtt_topic=%s", s_node_id, s_mqtt_topic);
 }
 
-// ── /api/config ───────────────────────────────────────────────────────────────
-void StatusServer::_handleConfig(AsyncWebServerRequest* req)
+// ── loop ──────────────────────────────────────────────────────────────────────
+void status_server_loop(AsyncWebServer* /*server*/)
 {
-    if (req->hasParam("startup_min_ms", true)) {
-        uint32_t v = (uint32_t)req->getParam("startup_min_ms", true)->value().toInt();
-        if (v >= 100 && v <= 2000) {
-            _sched->setStartupMinMs(v);
-            log_i("StatusServer: startup_min_ms set to %u", v);
-        }
+    ElegantOTA.loop();
+
+    // MQTT reconnect + publish every MQTT_INTERVAL_MS.
+    if (!s_mqtt.connected()) {
+        char client_id[24];
+        snprintf(client_id, sizeof(client_id), "syncstreamer-%s", s_node_id);
+        s_mqtt.connect(client_id);  // non-blocking attempt; ignore failure
     }
-    if (req->hasParam("duck_level_pct", true)) {
-        int v = req->getParam("duck_level_pct", true)->value().toInt();
-        if (v >= 0 && v <= 50) {
-            _audio->setDuckLevelPercent(v);
-            log_i("StatusServer: duck_level_pct set to %d", v);
-        }
+    s_mqtt.loop();
+
+    uint32_t now = millis();
+    if (now - s_last_mqtt_ms >= MQTT_INTERVAL_MS && s_mqtt.connected()) {
+        s_last_mqtt_ms = now;
+
+        const char* state_name[] = {"idle","acquiring","locked","recovering","reacquiring"};
+        int sn = (int)g_state;
+        if (sn < 0 || sn > 4) sn = 0;
+
+        char payload[256];
+        snprintf(payload, sizeof(payload),
+            "{\"state\":\"%s\",\"fill_ms\":%u,\"rate_ppm\":%.2f,"
+            "\"offset_us\":%lld,\"seq_gaps\":%u,\"rssi\":%d,\"uptime_s\":%lu}",
+            state_name[sn],
+            jb_occupancy_ms(),
+            (float)g_rate_ppm,
+            g_offset_us,
+            g_seq_gaps,
+            WiFi.RSSI(),
+            (unsigned long)(esp_timer_get_time() / 1000000ULL)
+        );
+        s_mqtt.publish(s_mqtt_topic, payload);
     }
-    req->send(200, "text/plain", "OK");
 }
