@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <ESPAsyncWebServer.h>
 
 #include "secrets.h"          // WIFI_SSID, WIFI_PASSWORD
@@ -16,6 +17,33 @@
 
 // ── Global web server ─────────────────────────────────────────────────────────
 static AsyncWebServer server(80);
+
+// ── Client registration ───────────────────────────────────────────────────────
+// Sends SYNC_HELLO to the server so it learns this device's IP and adds it
+// to its active unicast list.  Called on boot and every 30 s as a keepalive.
+static void send_announce()
+{
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    // endPacket() returns 0 (error 12 / ENOMEM) if the lwIP UDP stack is not
+    // yet fully ready — happens at boot AND after every reconnect.  Retry with
+    // a short back-off so all callers (boot, periodic keepalive, post-reconnect)
+    // are covered without needing a delay at the call site.
+    WiFiUDP udp;
+    for (int attempt = 1; attempt <= 5; ++attempt) {
+        udp.beginPacket(SERVER_HOST, ANNOUNCE_PORT);
+        udp.write(reinterpret_cast<const uint8_t*>("SYNC_HELLO"), 10);
+        if (udp.endPacket()) {
+            log_i("Announce → %s:%d  (our IP: %s, attempt %d)",
+                  SERVER_HOST, ANNOUNCE_PORT,
+                  WiFi.localIP().toString().c_str(), attempt);
+            return;
+        }
+        log_w("Announce: endPacket failed (attempt %d/5)", attempt);
+        delay(250);
+    }
+    log_e("Announce: gave up after 5 attempts");
+}
 
 // ── WiFi ──────────────────────────────────────────────────────────────────────
 static void wifi_connect()
@@ -37,6 +65,7 @@ static void wifi_connect()
     if (WiFi.status() == WL_CONNECTED) {
         log_i("WiFi: connected — IP %s  RSSI %d dBm",
               WiFi.localIP().toString().c_str(), WiFi.RSSI());
+        send_announce();
     } else {
         log_w("WiFi: timed out — will retry in loop");
     }
@@ -91,6 +120,13 @@ void loop()
 
     // ElegantOTA keepalive + MQTT publish
     status_server_loop(&server);
+
+    // Re-announce to server every 30 s so it keeps this client in its list.
+    static uint32_t s_last_announce = 0;
+    if (millis() - s_last_announce >= 30000) {
+        s_last_announce = millis();
+        send_announce();
+    }
 
     delay(10);
 }

@@ -99,7 +99,18 @@ void jb_flush(void)
     xSemaphoreGive(s_mutex);
     log_i("JitterBuffer: flushed");
 }
-
+// ── Sync to write head ────────────────────────────────────────────────────────
+void jb_sync_read_head(void)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    for (uint32_t i = 0; i < JB_FRAMES; i++) {
+        s_ring[i].valid = false;
+    }
+    s_read_head     = s_write_head;   // start empty from current stream position
+    s_last_write_us = 0;              // reset stall timer
+    xSemaphoreGive(s_mutex);
+    log_i("JitterBuffer: synced to stream position (ready for fill)");
+}
 // ── Stall detection ───────────────────────────────────────────────────────────
 bool jb_stalled(void)
 {

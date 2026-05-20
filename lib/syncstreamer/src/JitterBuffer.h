@@ -13,12 +13,12 @@
 // Ring of JB_FRAMES stereo frames indexed by (frame_seq & (JB_FRAMES-1)).
 // frame_seq = packet_seq * SYNC_FRAMES_PER_PACKET + frame_offset
 //
-// Capacity: 8192 frames = ~170 ms @ 48 kHz
+// Capacity: 16384 frames = ~341 ms @ 48 kHz  (must exceed JB_STARTUP_FRAMES)
 // Target fill: JB_TARGET_MS = 60 ms
 // Startup fill: JB_STARTUP_MS = 200 ms (used during ST_ACQUIRING)
 // ============================================================
 
-#define JB_FRAMES        8192u          // must be power of 2
+#define JB_FRAMES        16384u         // must be power of 2; > JB_STARTUP_FRAMES (9600)
 #define JB_MASK          (JB_FRAMES - 1)
 #define JB_SAMPLE_RATE   48000u
 #define JB_TARGET_MS     60u
@@ -53,8 +53,15 @@ uint32_t jb_occupancy_frames(void);
 // Occupancy in milliseconds.
 uint32_t jb_occupancy_ms(void);
 
-// Discard all frames and reset heads. Call on stream start/reacquire.
+// Discard all frames and reset heads. Call on server-directed stream stop.
+// Resets both read and write heads to zero (use before seq-0 restart).
 void jb_flush(void);
+
+// Sync read head to the current write head position, clearing all valid flags.
+// Use when entering ACQUIRING mid-stream: the ring starts empty from "now"
+// and fills at real-time rate — avoids the read head being stranded at 0
+// while valid data sits millions of frames ahead.
+void jb_sync_read_head(void);
 
 // Returns true if no jb_write has occurred in the last JB_STALL_US microseconds.
 bool jb_stalled(void);

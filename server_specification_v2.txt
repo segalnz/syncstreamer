@@ -1,0 +1,389 @@
+
+SyncStreamer v2 — Server Implementation Specification
+=====================================================
+Firmware revision: v2 (digital-PLL + fractional resampler)
+Date: 21 May 2026
+
+This document describes everything the server-side AI / developer needs to
+implement in order to drive one or more SyncStreamer v2 ESP32-S3 speaker
+clients.  It supersedes server_specification.txt (which described the old
+NTP-slip architecture).
+
+
+======================================================================
+SECTION 1 — PROJECT STATUS SUMMARY
+======================================================================
+
+Client firmware tasks (all complete — clean build committed):
+
+  [x] SyncPacket.h          — new v2 wire protocol (1040-byte UDP packets)
+  [x] JitterBuffer.h/.cpp   — PSRAM ring buffer, sequence-indexed
+  [x] AudioOutput.h/.cpp    — I2S (ESP-IDF v5), continuous clock, PCM5102A
+  [x] OffsetEstimator.h/.cpp — server-clock offset via rolling min-latency
+  [x] Resampler.h/.cpp      — fractional linear-interpolation resampler
+  [x] SyncController.h/.cpp — 5 Hz digital PLL + client state machine
+  [x] NetworkReceiver.h/.cpp — UDP audio (5005) + UDP control (5006) tasks
+  [x] StatusServer.h/.cpp   — dark-theme web dashboard, ElegantOTA, MQTT
+  [x] src/main.cpp          — SYNC_HELLO keepalive, task creation
+  [x] platformio.ini        — PubSubClient added, NTPSync/PlaybackScheduler removed
+
+Server tasks (to be implemented separately — this document):
+
+  [ ] UDP audio sender       — port 5005, v2 packet format
+  [ ] UDP control sender     — port 5006, text commands
+  [ ] Client registry        — SYNC_HELLO listener, IP tracking, 90 s TTL
+  [ ] Stream lifecycle       — STREAM_START / STREAM_STOP sequencing
+  [ ] Duck signalling        — DUCK_START / DUCK_END (TTS-over-music)
+  [ ] MQTT subscriber        — optional, for monitoring client health
+
+
+======================================================================
+SECTION 2 — NETWORK TOPOLOGY
+======================================================================
+
+Server IP       : 192.168.5.75  (Ubuntu, WiFi)
+MQTT broker     : 192.168.5.160 port 1883
+NTP server      : 192.168.5.4   (GNSS-disciplined — clients do NOT use NTP)
+Clients         : ESP32-S3 speakers, dynamic IPs, discovered via SYNC_HELLO
+
+All transport is UDP unicast on the local LAN.  No multicast, no TCP.
+
+
+======================================================================
+SECTION 3 — CLIENT DISCOVERY (SYNC_HELLO)
+======================================================================
+
+Each ESP32 client sends a 10-byte UDP datagram containing the ASCII
+string "SYNC_HELLO" (no null terminator needed) to the server:
+
+  Destination : SERVER_IP : ANNOUNCE_PORT (192.168.5.75 : 5006)
+  Payload     : b"SYNC_HELLO"   (10 bytes)
+  Timing      : immediately after WiFi connects at boot, then every 30 s
+
+The server MUST:
+  1. Listen on UDP port 5006 for incoming datagrams.
+  2. On receiving any datagram whose payload starts with "SYNC_HELLO",
+     record the source IP address and the current monotonic timestamp.
+  3. Maintain a client registry: { ip_str -> last_seen_monotonic }.
+  4. Expire any client not heard from for 90 seconds.
+  5. Stream audio (and send control messages) to every active client IP.
+
+NOTE: Port 5006 is shared — clients also listen on port 5006 for
+control messages FROM the server (see Section 5).  On the server side,
+the announcement listener and the control sender both use port 5006 but
+in opposite directions:
+  - Server receives SYNC_HELLO on server:5006  (bound, listening)
+  - Server sends  STREAM_START etc. to client:5006  (sendto, not bound)
+These do not conflict; use a single UDP socket on the server bound to
+port 5006 and call both recvfrom() and sendto() on it.
+
+Python skeleton:
+
+    import socket, threading, time
+
+    ANNOUNCE_PORT = 5006
+    CLIENT_TTL_S  = 90.0
+
+    class ClientRegistry:
+        def __init__(self):
+            self._clients = {}          # { "192.168.x.x": last_seen_mono }
+            self._lock    = threading.Lock()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("", ANNOUNCE_PORT))
+            self._sock = sock
+            threading.Thread(target=self._listen, daemon=True).start()
+
+        def _listen(self):
+            while True:
+                data, (ip, _) = self._sock.recvfrom(64)
+                if data[:10] == b"SYNC_HELLO":
+                    with self._lock:
+                        self._clients[ip] = time.monotonic()
+
+        def active_clients(self):
+            now = time.monotonic()
+            with self._lock:
+                return [ip for ip, t in self._clients.items()
+                        if now - t < CLIENT_TTL_S]
+
+        def send_control(self, msg: bytes):
+            """Broadcast a control message to all active clients."""
+            for ip in self.active_clients():
+                self._sock.sendto(msg, (ip, ANNOUNCE_PORT))
+
+
+======================================================================
+SECTION 4 — AUDIO PACKET FORMAT (UDP port 5005)
+======================================================================
+
+Every audio packet is exactly 1040 bytes. All fields are NATIVE byte
+order (little-endian on both the x86 server and the ESP32-S3).
+
+Offset  Size  Field         Type      Notes
+------  ----  -----------   -------   ------------------------------------
+0       4     magic         uint32    Must be 0xEE15A3D1 — sentinel
+4       4     sequence      uint32    Monotonically increasing, 0-based,
+                                      increments by 1 per packet.
+                                      Wraps at 2^32 (handled by firmware).
+8       8     present_us    uint64    Server µs timestamp: the moment at
+                                      which PCM frame[0] of THIS packet
+                                      should emerge from the DAC speaker
+                                      terminal.  See Section 6 for how
+                                      to compute this.
+16      1024  pcm[512]      int16[512] 256 stereo frames, interleaved:
+                                      L0, R0, L1, R1, … L255, R255.
+                                      Sample rate: 48000 Hz stereo.
+                                      Little-endian int16.
+
+Total: 4 + 4 + 8 + 1024 = 1040 bytes.
+
+Python packer:
+
+    import struct
+
+    MAGIC             = 0xEE15A3D1
+    FRAMES_PER_PACKET = 256
+    SAMPLE_RATE       = 48000    # Hz
+    PACKET_SIZE       = 1040     # bytes
+
+    HEADER_FMT  = "<IIQ"        # little-endian: uint32, uint32, uint64
+    HEADER_SIZE = struct.calcsize(HEADER_FMT)   # 16 bytes
+
+    def make_packet(sequence: int, present_us: int,
+                    pcm_frames: bytes) -> bytes:
+        """
+        pcm_frames: exactly 256*2*2 = 1024 bytes of interleaved stereo
+                    int16 LE samples (L0,R0,L1,R1,…L255,R255).
+        Returns a 1040-byte UDP payload.
+        """
+        assert len(pcm_frames) == FRAMES_PER_PACKET * 4
+        header = struct.pack(HEADER_FMT, MAGIC, sequence, present_us)
+        return header + pcm_frames
+
+Sender loop example:
+
+    import socket, time
+
+    AUDIO_PORT = 5005
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 131072)
+
+    sequence  = 0
+    frame_idx = 0   # absolute frame counter across all packets
+
+    while streaming:
+        pcm_chunk  = get_next_256_stereo_frames()   # your audio source
+        present_us = frame_to_present_us(frame_idx) # see Section 6
+        pkt        = make_packet(sequence, present_us, pcm_chunk)
+
+        for ip in registry.active_clients():
+            sock.sendto(pkt, (ip, AUDIO_PORT))
+
+        sequence  += 1
+        frame_idx += FRAMES_PER_PACKET
+        # sleep until next packet time (256 frames @ 48kHz = 5.333 ms)
+
+
+======================================================================
+SECTION 5 — CONTROL MESSAGES (UDP port 5006)
+======================================================================
+
+The server sends short ASCII text datagrams to each client's UDP port 5006.
+No response is expected except for PING.
+
+Message         Direction       Action on client
+-----------     -------------   -----------------------------------------------
+STREAM_START    server→client   Begin buffering; client transitions IDLE→ACQUIRING.
+                                Send this BEFORE the first audio packet.
+STREAM_STOP     server→client   Flush jitter buffer; mute audio; → ST_IDLE.
+DUCK_START      server→client   Set g_ducked=true (advisory; server may lower
+                                audio volume on TTS-over-music scenarios).
+DUCK_END        server→client   Clear g_ducked=false.
+PING            server→client   Client replies b"PONG" to the sender's address.
+PONG            client→server   Reply to PING (source port = NET_CTRL_PORT=5006).
+
+All messages are plain ASCII, no newline.  Use strncmp on the client.
+
+Recommended stream lifecycle:
+  1. Server obtains PCM audio source (Jellyfin / TTS pipeline).
+  2. Server sends STREAM_START to all active clients.
+  3. Server sends audio packets continuously (Section 4).
+  4. When stream ends, server sends STREAM_STOP.
+  5. For TTS overlaid on music: send DUCK_START before TTS packets,
+     DUCK_END after.  Client marks g_ducked but does NOT change volume —
+     ducking is advisory for future use.
+
+Python sender:
+
+    def send_control(self, msg: str):
+        payload = msg.encode()
+        for ip in self.active_clients():
+            self._sock.sendto(payload, (ip, ANNOUNCE_PORT))
+
+    # Usage:
+    registry.send_control("STREAM_START")
+    # ... stream audio ...
+    registry.send_control("STREAM_STOP")
+
+
+======================================================================
+SECTION 6 — PRESENTATION TIMESTAMP (present_us)
+======================================================================
+
+present_us is the server's wall-clock time (µs since Unix epoch) at
+which the FIRST FRAME of the packet should leave the speaker DAC.
+
+The client's OffsetEstimator tracks the difference between server time
+and its own esp_timer_get_time() using a rolling minimum-latency window.
+The firmware adds a 200 ms lead (OFFSET_FUDGE_US) so there is always
+buffer headroom.
+
+Server-side calculation:
+
+    SERVER_LEAD_US = 400_000   # 400 ms: must be > OFFSET_FUDGE_US (200 ms)
+                               # plus worst-case network jitter.
+
+    def frame_to_present_us(frame_index: int,
+                             stream_start_server_us: int) -> int:
+        """
+        frame_index          : absolute frame counter (0 for first frame
+                               of the stream, increments by 1 per stereo pair)
+        stream_start_server_us: server time (µs) when the stream was started
+        """
+        frame_offset_us = (frame_index * 1_000_000) // SAMPLE_RATE
+        return stream_start_server_us + frame_offset_us + SERVER_LEAD_US
+
+    def server_time_us() -> int:
+        """Current server wall-clock in microseconds."""
+        return int(time.time() * 1e6)
+
+    # On stream start:
+    stream_start_us = server_time_us()
+    frame_idx = 0
+
+    # Each packet:
+    present_us = frame_to_present_us(frame_idx, stream_start_us)
+    pkt = make_packet(sequence, present_us, pcm_chunk)
+    frame_idx += FRAMES_PER_PACKET
+
+IMPORTANT: present_us must be a monotonically increasing, real-time
+value.  If the audio source stalls, advance frame_idx by the number of
+silent frames inserted (do not repeat present_us values).
+
+
+======================================================================
+SECTION 7 — MQTT STATUS (read-only, server monitoring)
+======================================================================
+
+Each client publishes a JSON status message every 2 seconds to:
+
+  Topic   : speaker/<node_id>/status
+  Broker  : 192.168.5.160 : 1883
+  QoS     : 0 (at-most-once, fire-and-forget)
+
+<node_id> is the last 3 octets of the ESP32's MAC address, e.g. "a4b2c3".
+
+Payload (JSON, all fields present):
+
+    {
+      "state":     "locked",       // idle | acquiring | locked |
+                                   // recovering | reacquiring
+      "fill_ms":   58,             // jitter buffer occupancy in ms
+      "rate_ppm":  -3.21,          // fractional resampler correction
+      "offset_us": 183421,         // estimated server-clock offset (µs)
+      "seq_gaps":  0,              // cumulative missed UDP packets
+      "rssi":      -62,            // WiFi signal strength (dBm)
+      "uptime_s":  3742            // seconds since boot
+    }
+
+The server can subscribe to "speaker/+/status" to monitor all clients.
+
+    mosquitto_sub -h 192.168.5.160 -t "speaker/+/status"
+
+
+======================================================================
+SECTION 8 — WEB DASHBOARD & OTA (informational)
+======================================================================
+
+Each client runs an AsyncWebServer on port 80:
+
+  GET  http://<client_ip>/          — dark-theme status dashboard (SPA,
+                                      polls /api/status every 2 s)
+  GET  http://<client_ip>/api/status — JSON status (same fields as MQTT)
+  POST http://<client_ip>/api/config — adjust parameters:
+       target_fill_ms=<20..500>      — jitter buffer target (default 60)
+       mode=music|tts                — PLL aggressiveness (default music)
+  GET  http://<client_ip>/update    — ElegantOTA firmware upload page
+
+
+======================================================================
+SECTION 9 — CLIENT STATE MACHINE (informational)
+======================================================================
+
+The firmware's sync_task (5 Hz, Core 1) drives this state machine:
+
+  ST_IDLE
+    Waiting for STREAM_START control message.
+    Audio output: muted.
+    → ST_ACQUIRING on STREAM_START received.
+
+  ST_ACQUIRING
+    Buffering incoming audio.  No playback yet.
+    → ST_LOCKED when buffer reaches JB_STARTUP_FRAMES (9600 frames = 200 ms).
+    → ST_IDLE on stall (no packets for 500 ms).
+
+  ST_LOCKED  (normal operating state)
+    PLL active.  Fractional resampler corrects rate ±100 ppm (music) /
+    ±200 ppm (TTS).  Audio playing.
+    → ST_RECOVERING if occupancy drifts outside [30 ms, 120 ms] window.
+    → ST_REACQUIRING if occupancy < 10 ms (critical) or stall.
+
+  ST_RECOVERING
+    PLL continues.  Audio playing.  Waiting for occupancy to re-enter
+    the normal window.
+    → ST_LOCKED on re-entry.
+    → ST_REACQUIRING on critical underrun or stall.
+
+  ST_REACQUIRING
+    Buffer flushed, audio muted, resampler reset.  Waiting for refill.
+    → ST_LOCKED when buffer reaches JB_STARTUP_FRAMES again.
+    → ST_IDLE on stall.
+
+PLL parameters (music mode):
+  IIR coefficient      : 0.85  (smoothing)
+  Error gain           : 0.1 ppm per frame
+  Max rate change/tick : ±10 ppm per 200 ms
+  Max correction       : ±100 ppm  (music) / ±200 ppm (TTS)
+
+
+======================================================================
+SECTION 10 — QUICK-START CHECKLIST FOR SERVER DEVELOPER
+======================================================================
+
+1. Bind a UDP socket to port 5006.  Receive SYNC_HELLO; record client IPs.
+   Expire clients after 90 s of silence.
+
+2. When you want to play audio:
+   a. Send "STREAM_START" to all active client IPs on port 5006.
+   b. Record stream_start_us = int(time.time() * 1e6).
+   c. Set sequence = 0, frame_idx = 0.
+
+3. For each 256-frame chunk of PCM:
+   a. Compute present_us = stream_start_us + frame_idx*1e6/48000 + 400_000.
+   b. Pack into 1040-byte SyncPacket (Section 4).
+   c. Unicast to each active client on UDP port 5005.
+   d. Increment sequence by 1, frame_idx by 256.
+   e. Sleep until next 5.333 ms boundary to maintain real-time pacing.
+
+4. When stream ends:
+   a. Send "STREAM_STOP" to all active clients on port 5006.
+
+5. For TTS overlaid on background music:
+   a. Send "DUCK_START" before the TTS stream begins.
+   b. Send "DUCK_END" after the TTS stream finishes.
+   c. (Duck is currently advisory on the client; no volume change occurs yet.)
+
+6. Optionally subscribe to MQTT topic "speaker/+/status" on 192.168.5.160
+   to monitor client health in real time.
