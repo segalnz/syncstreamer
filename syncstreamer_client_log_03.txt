@@ -1,0 +1,227 @@
+[ 92299][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x10cc
+load:0x403c8700,len:0xc2c
+load:0x403cb700,len:0x30c0
+entry 0x403c88b8
+E (439) esp_core_dump_flash: No core dump partition found!
+E (439) esp_core_dump_flash: No core dump partition found!
+[     2][I][esp32-hal-psram.c:106] psramAddToHeap(): PSRAM added to the heap.
+[   231][I][main.cpp:43] wifiConnect(): WiFi: connecting to dd-wrt
+[   286][W][WiFiGeneric.cpp:893] setTxPower(): Neither AP or STA has been started
+[  3545][I][main.cpp:58] wifiConnect(): WiFi: connected â IP 192.168.5.24  RSSI -85 dBm  BSSID EC:41:18:E8:01:BA  Ch 2
+[  3557][I][main.cpp:36] sendAnnounce(): Announce â 192.168.5.75:5006  (our IP: 192.168.5.24)
+[  3566][I][NTPSync.cpp:25] begin(): NTPSync: polling 192.168.5.4
+[  3573][I][AudioOutput.cpp:52] init(): AudioOutput: I2S started â BCK=15 WS=16 DATA=17 UNMUTE=10
+[  3582][I][JitterBuffer.cpp:30] init(): JitterBuffer: 128 slots, 240 KB PSRAM
+[  3590][I][NetworkReceiver.cpp:49] begin(): NetworkReceiver: listening on UDP port 5005
+[  3598][I][PlaybackScheduler.cpp:16] begin(): PlaybackScheduler: started
+[  3604][I][SyncController.cpp:15] begin(): SyncController: started (threshold Â500 Âs, alpha=0.020)
+[  3614][I][StatusServer.cpp:138] begin(): StatusServer: routes registered
+[  3621][I][main.cpp:112] setup(): SyncStreamer ready â http://192.168.5.24/
+[  4588][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  5596][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  6604][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  7612][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  8259][I][NTPSync.cpp:49] _onSynced(): NTPSync: synced â epoch 1779219699
+[  8620][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  9628][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 10006][I][main.cpp:151] loop(): Status | WiFi: -88 dBm [EC:41:18:E8:01:BA Ch2] | NTP: OK | State: FILL | Buf: 0 ms | Vol: 100%
+[ 10018][I][main.cpp:159] loop():        | rx=0 parse_err=0 push_fail=0 | jbuf ok=0 late=0 dup=0 ovf=0 | Phase: 0 Âs (filt 0 Âs) | Slips +0/-0
+[ 10636][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 11644][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 12202][I][PlaybackScheduler.cpp:46] _run(): PlaybackScheduler: buffer ready (300 ms), starting playback
+[ 12503][I][PlaybackScheduler.cpp:135] _run(): PlaybackScheduler: epoch set to 1779219703567621 Âs
+[ 12513][I][PlaybackScheduler.cpp:135] _run(): PlaybackScheduler: epoch set to 1779219703577621 Âs
+[ 14343][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=57 by 1230207 Âs â skipping
+[ 14353][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=58 by 1230324 Âs â skipping
+[ 14363][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=59 by 1230256 Âs â skipping
+[ 14373][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=60 by 1230196 Âs â skipping
+[ 14383][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=61 by 1230132 Âs â skipping
+[ 14393][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=62 by 1230063 Âs â skipping
+[ 14403][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=63 by 1230000 Âs â skipping
+[ 14413][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=64 by 1229931 Âs â skipping
+[ 14423][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=65 by 1229863 Âs â skipping
+[ 14433][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=66 by 1229794 Âs â skipping
+[ 14442][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=67 by 1229726 Âs â skipping
+[ 14452][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=68 by 1229659 Âs â skipping
+[ 14462][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=69 by 1229593 Âs â skipping
+[ 14472][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=70 by 1229525 Âs â skipping
+[ 14482][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=71 by 1229461 Âs â skipping
+[ 14492][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=72 by 1229398 Âµs â skipping
+[ 14502][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=73 by 1229330 Âs â skipping
+[ 14512][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=74 by 1229261 Âs â skipping
+[ 14522][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=75 by 1229192 Âs â skipping
+[ 14532][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=76 by 1229129 Âs â skipping
+[ 14542][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=77 by 1229060 Âs â skipping
+[ 14552][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=78 by 1229038 Âs â skipping
+[ 14562][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=79 by 1229103 Âs â skipping
+[ 14572][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=80 by 1229039 Âs â skipping
+[ 14582][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=81 by 1228976 Âs â skipping
+[ 14592][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=82 by 1228907 Âs â skipping
+[ 14602][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=83 by 1228839 Âs â skipping
+[ 14611][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=84 by 1228770 Âs â skipping
+[ 14621][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=85 by 1228702 Âs â skipping
+[ 14631][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=86 by 1228637 Âs â skipping
+[ 14641][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=87 by 1228569 Âs â skipping
+[ 14651][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=88 by 1228501 Âs â skipping
+[ 14661][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=89 by 1228486 Âs â skipping
+[ 14671][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=90 by 1228558 Âs â skipping
+[ 14681][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=91 by 1228490 Âs â skipping
+[ 14691][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=92 by 1228422 Âs â skipping
+[ 14701][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=93 by 1228354 Âs â skipping
+[ 14711][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=94 by 1228286 Âs â skipping
+[ 14721][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=95 by 1228217 Âs â skipping
+[ 14731][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=96 by 1228152 Âs â skipping
+[ 14741][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=97 by 1228085 Âs â skipping
+[ 14751][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=98 by 1228033 Âs â skipping
+[ 14761][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=99 by 1227980 Âs â skipping
+[ 14771][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=100 by 1227946 Âs â skipping
+[ 14781][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=101 by 1227970 Âs â skipping
+[ 14791][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=102 by 1227989 Âs â skipping
+[ 14801][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=103 by 1228009 Âs â skipping
+[ 14811][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=104 by 1228029 Âs â skipping
+[ 14821][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=105 by 1228053 Âs â skipping
+[ 14831][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=106 by 1228078 Âs â skipping
+[ 14841][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=107 by 1228102 Âs â skipping
+[ 14851][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=108 by 1228132 Âs â skipping
+[ 14861][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=109 by 1228152 Âs â skipping
+[ 14871][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=110 by 1228180 Âs â skipping
+[ 14881][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=111 by 1228200 Âs â skipping
+[ 14891][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=112 by 1228221 Âs â skipping
+[ 14901][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=113 by 1228252 Âs â skipping
+[ 14911][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=114 by 1228272 Âs â skipping
+[ 14921][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=115 by 1228291 Âs â skipping
+[ 14931][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=116 by 1228311 Âs â skipping
+[ 14941][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=117 by 1228331 Âs â skipping
+[ 14951][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=118 by 1228350 Âµs â skipping
+[ 14961][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=119 by 1228381 Âs â skipping
+[ 14971][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=120 by 1228429 Âs â skipping
+[ 14981][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=121 by 1228453 Âs â skipping
+[ 14991][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=122 by 1228472 Âs â skipping
+[ 15001][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=123 by 1228492 Âs â skipping
+[ 15011][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=124 by 1228511 Âs â skipping
+[ 15021][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=125 by 1228531 Âs â skipping
+[ 15031][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=126 by 1228551 Âs â skipping
+[ 15041][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=127 by 1228570 Âs â skipping
+[ 15051][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=128 by 1228591 Âs â skipping
+[ 15061][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=129 by 1228613 Âs â skipping
+[ 15071][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=130 by 1228695 Âs â skipping
+[ 15082][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=131 by 1228857 Âs â skipping
+[ 15092][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=132 by 1228877 Âs â skipping
+[ 15102][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=133 by 1228896 Âs â skipping
+[ 15112][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=134 by 1228916 Âs â skipping
+[ 15122][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=135 by 1228936 Âs â skipping
+[ 15132][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=136 by 1228955 Âs â skipping
+[ 15142][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=137 by 1228975 Âs â skipping
+[ 15152][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=138 by 1228995 Âs â skipping
+[ 15162][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=139 by 1229016 Âs â skipping
+[ 15172][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=140 by 1229067 Âs â skipping
+[ 15182][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=141 by 1229094 Âs â skipping
+[ 15192][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=142 by 1229124 Âs â skipping
+[ 15202][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=143 by 1229148 Âs â skipping
+[ 15212][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=144 by 1229168 Âs â skipping
+[ 15222][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=145 by 1229188 Âs â skipping
+[ 15232][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=146 by 1229207 Âµs â skipping
+[ 15242][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=147 by 1229246 Âs â skipping
+[ 15252][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=148 by 1229307 Âs â skipping
+[ 15262][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=149 by 1229327 Âs â skipping
+[ 15272][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=150 by 1229348 Âs â skipping
+[ 15282][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=151 by 1229389 Âs â skipping
+[ 15292][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=152 by 1229420 Âs â skipping
+[ 15302][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=153 by 1229453 Âs â skipping
+[ 15312][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=154 by 1229507 Âs â skipping
+[ 15322][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=155 by 1229526 Âs â skipping
+[ 15332][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=156 by 1229546 Âs â skipping
+[ 15342][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=157 by 1229566 Âs â skipping
+[ 15352][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=158 by 1229586 Âs â skipping
+[ 15362][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=159 by 1229606 Âs â skipping
+[ 15372][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=160 by 1229634 Âs â skipping
+[ 15382][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=161 by 1229684 Âs â skipping
+[ 15392][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=162 by 1229704 Âs â skipping
+[ 15402][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=163 by 1229724 Âs â skipping
+[ 15412][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=164 by 1229743 Âs â skipping
+[ 15422][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=165 by 1229763 Âs â skipping
+[ 15433][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=166 by 1229782 Âs â skipping
+[ 15443][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=167 by 1229802 Âs â skipping
+[ 15453][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=168 by 1229822 Âs â skipping
+[ 15463][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=169 by 1229841 Âs â skipping
+[ 15473][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=170 by 1229942 Âs â skipping
+[ 15483][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=171 by 1230273 Âs â skipping
+[ 15493][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=172 by 1230344 Âs â skipping
+[ 15503][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=173 by 1230363 Âs â skipping
+[ 15513][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=174 by 1230383 Âs â skipping
+[ 15523][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=175 by 1230403 Âs â skipping
+[ 15533][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=176 by 1230422 Âs â skipping
+[ 15543][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=177 by 1230442 Âµs â skipping
+[ 15553][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=178 by 1230462 Âs â skipping
+[ 15563][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=179 by 1230481 Âs â skipping
+[ 15573][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=180 by 1230504 Âs â skipping
+[ 15583][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=181 by 1230568 Âs â skipping
+[ 15593][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=182 by 1230605 Âs â skipping
+[ 15603][W][PlaybackScheduler.cpp:123] _run(): PlaybackScheduler: late block seq=183 by 1230650 Âs â skipping
+[ 20014][I][main.cpp:151] loop(): Status | WiFi: -87 dBm [EC:41:18:E8:01:BA Ch2] | NTP: OK | State: PLAY | Buf: 0 ms | Vol: 100%
+[ 20026][I][main.cpp:159] loop():        | rx=229 parse_err=0 push_fail=45 | jbuf ok=184 late=0 dup=0 ovf=45 | Phase: 1646135 Âs (filt 275999 Âs) | Slips +2/-10
+[ 30011][I][main.cpp:36] sendAnnounce(): Announce â 192.168.5.75:5006  (our IP: 192.168.5.24)
+[ 30030][I][main.cpp:151] loop(): Status | WiFi: -85 dBm [EC:41:18:E8:01:BA Ch2] | NTP: OK | State: PLAY | Buf: 0 ms | Vol: 100%
+[ 30042][I][main.cpp:159] loop():        | rx=229 parse_err=0 push_fail=45 | jbuf ok=184 late=0 dup=0 ovf=45 | Phase: 1646136 Âs (filt 731421 Âs) | Slips +2/-30
+[ 39808][I][NTPSync.cpp:49] _onSynced(): NTPSync: synced â epoch 1779219729
+[ 40036][I][main.cpp:151] loop(): Status | WiFi: -89 dBm [EC:41:18:E8:01:BA Ch2] | NTP: OK | State: PLAY | Buf: 0 ms | Vol: 100%
+[ 40048][I][main.cpp:159] loop():        | rx=229 parse_err=0 push_fail=45 | jbuf ok=184 late=0 dup=0 ovf=45 | Phase: 1646133 Âs (filt 1035465 Âs) | Slips +2/-50
+[ 22749][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 23757][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 24765][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 25773][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 26781][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 27789][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 28798][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 29806][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 30004][I][main.cpp:36] sendAnnounce(): Announce â 192.168.5.75:5006  (our IP: 192.168.5.24)
+[ 30024][I][main.cpp:151] loop(): Status | WiFi: -61 dBm [C0:74:AD:B3:C4:ED Ch2] | NTP: OK | State: FILL | Buf: 0 ms | Vol: 100%
+[ 30036][I][main.cpp:159] loop():        | rx=0 parse_err=0 push_fail=0 | jbuf ok=0 late=0 dup=0 ovf=0 | Phase: 0 Âs (filt 0 Âs) | Slips +0/-0
+[ 30814][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 31822][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x10cc
+load:0x403c8700,len:0xc2c
+load:0x403cb700,len:0x30c0
+entry 0x403c88b8
+E (439) esp_core_dump_flash: No core dump partition found!
+E (439) esp_core_dump_flash: No core dump partition found!
+[     2][I][esp32-hal-psram.c:106] psramAddToHeap(): PSRAM added to the heap.
+[   231][I][main.cpp:43] wifiConnect(): WiFi: connecting to dd-wrt
+[   286][W][WiFiGeneric.cpp:893] setTxPower(): Neither AP or STA has been started
+[  1546][I][main.cpp:58] wifiConnect(): WiFi: connected â IP 192.168.5.24  RSSI -62 dBm  BSSID C0:74:AD:B3:C4:ED  Ch 2
+[  1558][I][main.cpp:36] sendAnnounce(): Announce â 192.168.5.75:5006  (our IP: 192.168.5.24)
+[  1567][I][NTPSync.cpp:25] begin(): NTPSync: polling 192.168.5.4
+[  1574][I][AudioOutput.cpp:52] init(): AudioOutput: I2S started â BCK=15 WS=16 DATA=17 UNMUTE=10
+[  1583][I][JitterBuffer.cpp:30] init(): JitterBuffer: 128 slots, 240 KB PSRAM
+[  1591][I][NetworkReceiver.cpp:49] begin(): NetworkReceiver: listening on UDP port 5005
+[  1599][I][PlaybackScheduler.cpp:16] begin(): PlaybackScheduler: started
+[  1605][I][SyncController.cpp:15] begin(): SyncController: started (threshold Â500 Âs, alpha=0.020)
+[  1615][I][StatusServer.cpp:138] begin(): StatusServer: routes registered
+[  1622][I][main.cpp:112] setup(): SyncStreamer ready â http://192.168.5.24/
+[  2589][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  3597][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  4605][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  5613][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  5679][I][NTPSync.cpp:49] _onSynced(): NTPSync: synced â epoch 1779220683
+[  6621][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  7630][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  8638][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[  9646][I][PlaybackScheduler.cpp:56] _run(): PlaybackScheduler: still filling (0 ms), rx=0
+[ 10004][I][main.cpp:151] loop(): Status | WiFi: -66 dBm [C0:74:AD:B3:C4:ED Ch2] | NTP: OK | State: FILL | Buf: 0 ms | Vol: 100%
+[ 10016][I][main.cpp:159] loop():        | rx=0 parse_err=0 push_fail=0 | jbuf ok=0 late=0 dup=0 ovf=0 | Phase: 0 Âs (filt 0 Âs) | Slips +0/-0
+[ 10514][I][PlaybackScheduler.cpp:46] _run(): PlaybackScheduler: buffer ready (300 ms), starting playback
+[ 10777][I][PlaybackScheduler.cpp:135] _run(): PlaybackScheduler: epoch set to 1779220688303410 Âs
+[ 10787][I][PlaybackScheduler.cpp:135] _run(): PlaybackScheduler: epoch set to 1779220688313410 Âs
+[ 20009][I][main.cpp:151] loop(): Status | WiFi: -66 dBm [C0:74:AD:B3:C4:ED Ch2] | NTP: OK | State: PLAY | Buf: 0 ms | Vol: 100%
+[ 20021][I][main.cpp:159] loop():        | rx=230 parse_err=0 push_fail=0 | jbuf ok=230 late=0 dup=0 ovf=0 | Phase: -52727 Âs (filt -13440 Âs) | Slips +15/-0

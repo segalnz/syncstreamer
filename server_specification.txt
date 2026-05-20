@@ -1,0 +1,599 @@
+﻿
+## SyncStreamer Server Module — Specification
+### Revision 2 — dynamic client registration
+
+---
+
+### 1. Overview
+
+The `syncstreamer` module is added to the existing Python server at `192.168.5.75`.
+It consumes PCM audio from the existing TTS and Jellyfin pipelines, packetises it
+into wall-clock-stamped UDP blocks, and unicasts them to all ESP32-S3 speakers that
+are currently registered.
+
+Clients register themselves: each ESP32 sends a small UDP "hello" on boot and every
+30 s. The server tracks the source IP and streams audio to every recently-seen client.
+No static IP configuration is needed on either side.
+
+---
+
+### 2. Packet Format
+
+Header is **exactly 20 bytes**, all multi-byte fields **big-endian**.
+PCM payload is **little-endian int16** (ESP32 native — the client casts bytes directly
+to int16_t[] with no byte-swap).
+
+| Offset | Size | Field                | Type       | Notes                                      |
+|--------|------|----------------------|------------|--------------------------------------------|
+| 0      | 4    | stream_id            | uint32 BE  | Non-zero; increment on every new stream    |
+| 4      | 4    | sequence             | uint32 BE  | 0-based, increments by 1 per packet        |
+| 8      | 8    | presentation_time_us | int64 BE   | UNIX µs when sample[0] exits the DAC       |
+| 16     | 2    | sample_count         | uint16 BE  | Stereo pairs OR mono samples; max 240      |
+| 18     | 2    | flags                | uint16 BE  | 0x0001=MONO  0x0002=DUCKED                 |
+| 20     | N    | PCM payload          | int16[] LE | sample_count × channels × 2 bytes          |
+
+`channels` = 1 if MONO flag set, else 2.
+Max UDP payload: stereo 240×2×2+20 = **980 bytes**; mono 240×2+20 = **500 bytes**.
+Both fit comfortably within the 1,472-byte unfragmented UDP limit (1500 B MTU − 20 IP − 8 UDP).
+
+**Python packer:**
+```python
+import struct
+
+HEADER_FMT = '!IIqHH'   # big-endian: uint32 uint32 int64 uint16 uint16
+HEADER_SIZE = 20
+BLOCK_SAMPLES = 240       # 5 ms @ 48 kHz — keeps stereo packets ≤980 B, below 1472 B MTU
+SAMPLE_RATE   = 48000
+FLAG_MONO   = 0x0001
+FLAG_DUCKED = 0x0002
+
+def pack_packet(stream_id: int, sequence: int, presentation_time_us: int,
+                pcm_le_bytes: bytes, flags: int) -> bytes:
+    sample_count = len(pcm_le_bytes) // 2 // (1 if (flags & FLAG_MONO) else 2)
+    header = struct.pack(HEADER_FMT,
+                         stream_id, sequence, presentation_time_us,
+                         sample_count, flags)
+    return header + pcm_le_bytes   # PCM already little-endian from source
+```
+
+---
+
+### 3. Client Registration
+
+The server listens on **UDP port 5006** (announce port).
+
+Each ESP32 sends `b"SYNC_HELLO"` (10 bytes) to `192.168.5.75:5006`:
+- immediately after WiFi connects at boot
+- every **30 seconds** as a keepalive
+
+The server records the **source IP** from the UDP socket and the current monotonic
+timestamp. Any client not seen for **90 seconds** is expired automatically.
+
+```python
+import socket, threading, time
+
+class ClientRegistry:
+    def __init__(self, announce_port: int = 5006, ttl_sec: float = 90.0):
+        self._clients: dict[str, float] = {}   # ip → last_seen (monotonic)
+        self._lock    = threading.Lock()
+        self._ttl     = ttl_sec
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('', announce_port))
+        threading.Thread(target=self._listen, args=(sock,), daemon=True).start()
+
+    def _listen(self, sock: socket.socket) -> None:
+        while True:
+            try:
+                _, addr = sock.recvfrom(64)
+                with self._lock:
+                    self._clients[addr[0]] = time.monotonic()
+            except OSError:
+                break
+
+    def active_clients(self) -> list[str]:
+        cutoff = time.monotonic() - self._ttl
+        with self._lock:
+            return [ip for ip, t in self._clients.items() if t >= cutoff]
+```
+
+---
+
+### 4. NTP Wall Clock
+
+The server's system clock is disciplined by the GNSS NTP server at `192.168.5.4`.
+Use `clock_gettime(CLOCK_REALTIME)` for sub-microsecond resolution:
+
+```python
+import ctypes, ctypes.util
+
+class _timespec(ctypes.Structure):
+    _fields_ = [('tv_sec', ctypes.c_long), ('tv_nsec', ctypes.c_long)]
+
+_librt = ctypes.CDLL(ctypes.util.find_library('rt') or 'librt.so.6')
+
+def ntp_now_us() -> int:
+    ts = _timespec()
+    _librt.clock_gettime(0, ctypes.byref(ts))          # 0 = CLOCK_REALTIME
+    return ts.tv_sec * 1_000_000 + ts.tv_nsec // 1_000
+```
+
+---
+
+### 5. Stream Lifecycle
+
+A **stream** is a contiguous sequence of packets from a single audio source.
+Every new source (TTS utterance, new Jellyfin track, resumed music after TTS) gets
+a new `stream_id` starting from 1, incrementing by 1.
+
+**Starting a stream:**
+```python
+CLIENT_PREBUFFER_US = 600_000    # 600 ms — gives clients time to buffer before playing
+
+stream_id  += 1
+sequence    = 0
+stream_start_us = ntp_now_us() + CLIENT_PREBUFFER_US
+```
+
+**Presentation timestamp for each packet:**
+```python
+presentation_time_us = stream_start_us + (sequence * BLOCK_SAMPLES * 1_000_000) // SAMPLE_RATE
+# seq 0  → stream_start_us + 0
+# seq 1  → stream_start_us + 10,000 µs
+# seq 47 → stream_start_us + 470,000 µs  (≈ first packet the client plays)
+```
+
+**Sequence number** increments by 1 for every packet sent, regardless of flags or content.
+
+---
+
+### 6. Send Loop
+
+Packets must be sent at real-time pace — **one packet every 5 ms** (200 packets/sec).
+Do not pre-generate all audio and send in a burst.
+
+```python
+import socket, time
+
+class UDPSender:
+    def __init__(self, audio_port: int = 5005):
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._port = audio_port
+
+    def send_to_clients(self, packet: bytes, clients: list[str]) -> None:
+        for ip in clients:
+            self._sock.sendto(packet, (ip, self._port))
+
+
+def stream_audio(source_chunks, stream_id: int, flags: int,
+                 registry: ClientRegistry, sender: UDPSender) -> None:
+    """
+    source_chunks: iterator of bytes objects, each exactly
+                   BLOCK_SAMPLES * channels * 2 bytes (little-endian int16).
+    """
+    sequence = 0
+    stream_start_us = ntp_now_us() + CLIENT_PREBUFFER_US
+    next_send_time  = time.monotonic()
+
+    for pcm_chunk in source_chunks:
+        presentation_time_us = (stream_start_us
+                                + (sequence * BLOCK_SAMPLES * 1_000_000) // SAMPLE_RATE)
+        packet = pack_packet(stream_id, sequence, presentation_time_us,
+                             pcm_chunk, flags)
+        clients = registry.active_clients()
+        sender.send_to_clients(packet, clients)
+
+        sequence       += 1
+        next_send_time += 0.005                        # 5 ms per packet
+        sleep = next_send_time - time.monotonic()
+        if sleep > 0:
+            time.sleep(sleep)
+```
+
+---
+
+### 7. Audio Sources
+
+Both sources deliver PCM as an iterator of fixed-size `bytes` chunks.
+
+**Stereo music (Jellyfin):**
+- Chunk size: `BLOCK_SAMPLES × 2 channels × 2 bytes = 960 bytes`
+- Format: 48 kHz, 16-bit signed, stereo interleaved, **little-endian**
+- `flags = 0x0000`  (no MONO, no DUCKED — add DUCKED during barge-in, see §8)
+- If Jellyfin outputs a different rate, pipe through:
+  `ffmpeg -f s16le -ar <src_rate> -ac 2 -i pipe:0 -f s16le -ar 48000 -ac 2 pipe:1`
+
+**Mono TTS:**
+- Chunk size: `BLOCK_SAMPLES × 1 channel × 2 bytes = 480 bytes`
+- Format: 48 kHz, 16-bit signed, mono, **little-endian**
+- `flags = FLAG_MONO` (0x0001)
+- If TTS outputs a different rate, resample before chunking
+
+**Chunking helper:**
+```python
+def iter_chunks(pcm_bytes: bytes, chunk_size: int):
+    """Yield fixed-size chunks; zero-pad the final chunk if needed."""
+    for i in range(0, len(pcm_bytes), chunk_size):
+        chunk = pcm_bytes[i:i + chunk_size]
+        if len(chunk) < chunk_size:
+            chunk = chunk + b'\x00' * (chunk_size - len(chunk))
+        yield chunk
+```
+
+---
+
+### 8. Barge-in / Duck Protocol
+
+When the wake word fires while music is playing:
+
+```
+State:      MUSIC ──► DUCKING ──► TTS ──► MUSIC (new stream_id)
+Packets:    music      music       tts      music
+FLAGS:      0x0000     0x0002     0x0001   0x0000
+```
+
+**Step-by-step:**
+
+1. Wake word detected → set `ducking = True`; continue sending music packets
+   with `flags |= FLAG_DUCKED`.  The client ramps volume to 20% over 50 ms.
+
+2. After **6 ducked music packets (60 ms)** the client is fully ducked.
+   Stop the music stream. Start a new stream (new `stream_id`) for TTS with
+   `flags = FLAG_MONO`.  The client detects the stream_id change, resets to
+   full volume, and re-buffers.
+
+3. TTS ends → stop TTS stream.  Start a new stream (new `stream_id`) for music
+   resuming from where it paused.  `flags = 0x0000`.
+
+```python
+DUCK_OVERLAP_PACKETS = 6
+
+def barge_in_switch(music_iter, tts_iter, stream_id: int,
+                    registry: ClientRegistry, sender: UDPSender) -> int:
+    """Returns the next available stream_id after the TTS completes."""
+    # Phase 1: send 6 ducked music packets
+    music_buf = iter_chunks(b''.join(itertools.islice(music_iter,
+                            DUCK_OVERLAP_PACKETS * 1920)), 1920)
+    stream_audio(music_buf, stream_id, FLAG_DUCKED, registry, sender)
+
+    # Phase 2: TTS (new stream)
+    stream_id += 1
+    tts_chunks = iter_chunks(b''.join(tts_iter), 960)
+    stream_audio(tts_chunks, stream_id, FLAG_MONO, registry, sender)
+
+    # Phase 3: music resumes (new stream, full volume)
+    stream_id += 1
+    return stream_id   # caller continues music with this stream_id
+```
+
+---
+
+### 9. Configuration
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class SyncStreamerConfig:
+    audio_port:        int   = 5005
+    announce_port:     int   = 5006
+    block_samples:     int   = 240        # 5 ms @ 48 kHz — keeps stereo ≤980 B (MTU-safe)
+    sample_rate:       int   = 48000      # do not change
+    client_prebuffer_us: int = 600_000    # 600 ms lead time before play
+    duck_overlap_packets: int = 6         # ducked music packets before TTS switch
+    client_ttl_sec:    float = 90.0       # expire unannounced clients after this
+```
+
+---
+
+### 10. Public API
+
+```python
+class SyncStreamerModule:
+    def __init__(self, config: SyncStreamerConfig = SyncStreamerConfig()): ...
+
+    # ── Called by existing server modules ────────────────────────────────────
+
+    def play_music(self, pcm_source) -> None:
+        """Start streaming Jellyfin PCM (stereo, 48 kHz, LE int16 chunks)."""
+
+    def stop_music(self) -> None:
+        """Stop music immediately (sends silence gap, not a new stream)."""
+
+    def play_tts(self, pcm_bytes: bytes) -> None:
+        """
+        Stream a TTS utterance (mono, 48 kHz, LE int16).
+        If music is playing, executes the barge-in duck sequence automatically.
+        Blocks until TTS is fully sent; music resumes after return.
+        """
+
+    def on_mic_open(self) -> None:
+        """Notify that the mic is open (wake word fired). Begins ducking."""
+
+    def on_mic_close(self) -> None:
+        """Notify that the mic closed without TTS (cancel duck, restore volume)."""
+
+    # ── Status ───────────────────────────────────────────────────────────────
+
+    def active_client_count(self) -> int:
+        """Number of ESP32s currently registered."""
+
+    def current_stream_id(self) -> int:
+        """The stream_id being sent right now (0 if idle)."""
+```
+
+---
+
+### 11. Non-Functional Requirements
+
+| Requirement             | Target                                                  |
+|-------------------------|---------------------------------------------------------|
+| Send jitter             | < 1 ms (use `time.sleep` with drift correction)         |
+| Stream switch latency   | < 100 ms from trigger to first TTS packet on wire       |
+| Duck overlap            | Exactly 6 packets (60 ms) before stream switch          |
+| Client registration lag | ≤ 30 s (one heartbeat cycle)                            |
+| Client expiry           | 90 s after last announce                                |
+| Packet loss             | No retransmit — handled by client jitter buffer         |
+| NTP dependency          | Server clock must be synced; verify with `timedatectl`  |
+
+---
+
+### 12. Verification Checklist
+
+Before declaring the implementation working, confirm each item:
+
+- [ ] `timedatectl` shows `System clock synchronized: yes`, NTP server `192.168.5.4`
+- [ ] `sudo tcpdump -i any udp port 5006` shows SYNC_HELLO arriving when ESP32 boots
+- [ ] `sudo tcpdump -i any udp port 5005` shows packets every ~5 ms during playback
+- [ ] Packet length is 980 (stereo) or 500 (mono) bytes including header
+- [ ] PCM bytes confirmed little-endian (first sample of a 1 kHz sine at 48 kHz:
+      bytes 20-21 of first packet should be near `0x00 0x00`; bytes 20-21 of
+      packet ~12 should be near `0xFF 0x7F` for a full-scale sine)
+- [ ] `stream_id` starts at 1, increments on every new source
+- [ ] `sequence` resets to 0 on every new stream_id
+- [ ] `presentation_time_us` of packet 0 is ~600 ms in the future from send time
+- [ ] After registration, ESP32 serial log shows `State: PLAY` within ~1 s
+
+
+The server is a Python process on `192.168.5.75` that already:
+- Runs STT / LLM / TTS pipelines
+- Has a Jellyfin playback module
+
+This spec describes the **`syncstreamer` module** that is added to that server. It consumes PCM audio from TTS and Jellyfin, packetizes it with NTP wall-clock timestamps, and streams it to ESP32-S3 clients over UDP.
+
+---
+
+### 2. Scope
+
+**In scope:**
+- SyncAudioPacket framing (matching the client protocol exactly)
+- Stream epoch and presentation timestamp calculation
+- UDP unicast sender to IP-whitelisted clients
+- Audio source interface (TTS PCM, Jellyfin PCM)
+- Barge-in duck/restore signalling via `FLAGS_DUCKED`
+- Stream lifecycle management (start, switch, stop)
+- Single audio zone
+
+**Out of scope:**
+- Audio mixing (only one source plays at a time)
+- Client discovery (whitelist only)
+- Multicast
+- Multiple zones
+
+---
+
+### 3. Protocol Reference
+
+Matches the client exactly (see `SyncPacket.h`):
+
+| Field | Type | Notes |
+|---|---|---|
+| `stream_id` | uint32 BE | Incremented on each new stream |
+| `sequence` | uint32 BE | 0-based per stream, increments per packet |
+| `presentation_time_us` | int64 BE | UNIX µs when sample[0] exits DAC on client |
+| `sample_count` | uint16 BE | Mono samples or stereo pairs; max 240 |
+| `flags` | uint16 BE | `0x0001` = MONO, `0x0002` = DUCKED |
+| PCM payload | int16[] **LE** | `sample_count × (1 or 2) × 2` bytes — **little-endian** (ESP32 native); client does a raw cast with no byte-swap |
+
+**Block size:** 240 samples = 5 ms @ 48 kHz → 200 packets/sec
+Stereo packet: 20 + 240×2×2 = **980 bytes** ✓  Mono packet: 20 + 240×2 = **500 bytes** ✓  Both below 1,472-byte MTU limit.
+
+---
+
+### 4. Stream Epoch and Timestamps
+
+When a new stream starts:
+
+```python
+stream_start_us = ntp_now_us() + CLIENT_PREBUFFER_US  # e.g. +600 ms
+```
+
+Clients need `STARTUP_MIN_MS` (300 ms default) before they play, plus network travel time. 600 ms gives comfortable margin.
+
+For each packet `seq`:
+```python
+presentation_time_us = stream_start_us + (seq * BLOCK_SAMPLES * 1_000_000) // SAMPLE_RATE
+# e.g. seq=0 → +0 µs, seq=1 → +5 000 µs, seq=100 → +500 000 µs
+```
+
+The server uses `time.clock_gettime(CLOCK_REALTIME)` (sub-µs on Linux with GNSS NTP) for `ntp_now_us()`.
+
+**Send pacing:** Send packets at the stream's natural rate (~200/sec for 48 kHz/240-sample blocks). Do not burst the entire buffer ahead — this causes all later blocks to arrive with past timestamps and the client will drop them. A send loop with `time.sleep()` or `asyncio` sleep maintaining ~5 ms/packet inter-packet gap is sufficient.
+
+---
+
+### 5. Module Architecture
+
+```
+syncstreamer/
+  __init__.py
+  protocol.py       — SyncPacket packer (struct.pack, big-endian)
+  stream.py         — Stream class: epoch, sequence, timestamp calc
+  sender.py         — UDPSender: socket, whitelist, send_packet()
+  source.py         — AudioSource ABC + TtsSource + JellyfinSource
+  router.py         — AudioRouter: source selection, barge-in state machine
+  module.py         — SyncStreamerModule: public API, main task
+  config.py         — Dataclass: client IPs, ports, block size, prebuffer
+```
+
+---
+
+### 6. Audio Sources
+
+Both sources must deliver PCM as a generator/async generator of `bytes` chunks, each exactly `BLOCK_SAMPLES × channels × 2` bytes (raw 16-bit signed **little-endian** — do NOT convert to big-endian; the client casts the bytes directly to `int16_t[]` without byte-swapping).
+
+**`TtsSource`**
+- The existing TTS engine yields PCM audio; wrap its output in the `AudioSource` interface.
+- Format: 48 kHz, 16-bit, **mono** (`FLAGS_MONO = 0x0001`).
+- If TTS engine outputs a different sample rate, resample to 48 kHz (e.g. `scipy.signal.resample_poly` or `soxr`).
+
+**`JellyfinSource`**
+- Uses the existing Jellyfin module to obtain a PCM stream.
+- Format: 48 kHz, 16-bit, **stereo**.
+- If Jellyfin transcodes to a different rate, add `ffmpeg -f s16le -ar 48000 -ac 2` in the pipeline.
+
+---
+
+### 7. Barge-in / Duck Protocol
+
+#### States
+```
+MUSIC_PLAYING → MIC_ACTIVE → TTS_PLAYING → MUSIC_RESUMING → MUSIC_PLAYING
+```
+
+#### Transitions and FLAGS_DUCKED usage
+
+| Event | Server action | Flags on packets |
+|---|---|---|
+| Wake word / mic open | Set `_duck_pending = True` | Next music packets: `FLAGS_DUCKED = 1` |
+| After ≥ 60 ms of ducked music packets | Pause music; start TTS stream (new `stream_id`) | TTS packets: `FLAGS_DUCKED = 0, FLAGS_MONO = 1` |
+| TTS ends | Resume music stream (new `stream_id`) | Music packets: `FLAGS_DUCKED = 0` |
+| (client receives new stream_id) | Client calls `clearDuck()`, starts at full volume | — |
+
+**Key rule:** `FLAGS_DUCKED` is only set on **music** packets. TTS packets always have `FLAGS_DUCKED = 0`. The 60 ms window (6 packets) covers the client's 50 ms duck ramp before the stream switches.
+
+#### State machine (simplified)
+
+```python
+class BargeinState(Enum):
+    MUSIC = "music"
+    DUCKING = "ducking"       # music still playing, DUCKED=1
+    TTS = "tts"
+    RESTORING = "restoring"   # music resumed after TTS, DUCKED=0
+```
+
+---
+
+### 8. Client Registration
+
+Clients register themselves dynamically — no static IP whitelist.
+
+The server listens on **UDP port 5006** (announce port). When any ESP32 boots or
+reconnects it sends:
+```
+payload: b"SYNC_HELLO"  (10 bytes)
+```
+The server records `(source_ip, time.monotonic())`. Audio is unicast to every IP
+whose last announce was within the last **90 seconds**. Clients that go offline
+are automatically expired.
+
+Heartbeat: each ESP32 re-announces every **30 s**, so a client that stays
+connected is always in the active set.
+
+```python
+@dataclass
+class SyncStreamerConfig:
+    udp_port: int = 5005           # audio stream port
+    announce_port: int = 5006     # client registration port
+    block_samples: int = 240      # 5 ms — stereo ≤980 B, MTU-safe
+    sample_rate: int = 48000
+    client_prebuffer_us: int = 600_000   # 600 ms stream lead time
+    duck_overlap_packets: int = 6        # packets with DUCKED=1 before TTS switch
+    client_ttl_sec: float = 90.0         # expire after this many seconds
+```
+
+Server-side registry (runs in its own thread/task):
+```python
+import threading, socket, time
+
+class ClientRegistry:
+    def __init__(self, announce_port: int, ttl_sec: float = 90.0):
+        self._clients: dict[str, float] = {}  # ip -> last_seen monotonic
+        self._lock = threading.Lock()
+        self._ttl = ttl_sec
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.bind(('', announce_port))
+        threading.Thread(target=self._listen, daemon=True).start()
+
+    def _listen(self):
+        while True:
+            _, addr = self._sock.recvfrom(64)
+            with self._lock:
+                self._clients[addr[0]] = time.monotonic()
+
+    def active_clients(self) -> list[str]:
+        now = time.monotonic()
+        with self._lock:
+            return [ip for ip, t in self._clients.items()
+                    if now - t < self._ttl]
+```
+
+---
+
+### 9. Public API (`SyncStreamerModule`)
+
+```python
+class SyncStreamerModule:
+    def __init__(self, config: SyncStreamerConfig): ...
+
+    # Called by server when Jellyfin starts/stops playing
+    async def play_music(self, source: JellyfinSource): ...
+    async def stop_music(self): ...
+
+    # Called by server when TTS response is ready
+    async def play_tts(self, pcm_generator): ...
+
+    # Called by STT/VAD when mic opens (barge-in)
+    async def on_mic_open(self): ...
+
+    # Called by STT/VAD when mic closes
+    async def on_mic_close(self): ...
+```
+
+---
+
+### 10. NTP Time Source
+
+```python
+import ctypes, os
+
+CLOCK_REALTIME = 0
+
+class timespec(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_long), ("tv_nsec", ctypes.c_long)]
+
+_librt = ctypes.CDLL("librt.so.6", use_errno=True)
+
+def ntp_now_us() -> int:
+    ts = timespec()
+    _librt.clock_gettime(CLOCK_REALTIME, ctypes.byref(ts))
+    return ts.tv_sec * 1_000_000 + ts.tv_nsec // 1_000
+```
+
+Using `clock_gettime(CLOCK_REALTIME)` directly (rather than Python's `time.time()`) gives microsecond-resolution wall-clock time disciplined by the system NTP (GNSS-locked at 192.168.5.4).
+
+---
+
+### 11. Non-Functional Requirements
+
+| Requirement | Target |
+|---|---|
+| Send jitter | < 1 ms (asyncio or thread with `time.sleep` pacing) |
+| Stream switch latency | < 100 ms from trigger to new stream packets on wire |
+| Duck overlap | 60 ms (6 packets) before stream switch |
+| Packet loss tolerance | Handled by client jitter buffer — no retransmit |
+| CPU overhead | < 5% on server (pure UDP send + struct.pack) |
+
+---
+
+Ready to start implementation, or do you want to adjust anything in the spec first?

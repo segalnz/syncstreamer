@@ -1,0 +1,397 @@
+
+PROJECT GOAL
+
+Develop a lightweight synchronized multi-room audio client for ESP32-S3 N8R2 or N16R8 smart speakers using Arduino framework compatibility (required for microWakeWord/openWakeWord support).
+
+The system is NOT intended to be a general-purpose streaming ecosystem like Snapcast, AirPlay, Sonos, or Squeezelite. It is a controlled LAN-only synchronized PCM playback appliance system with identical hardware and firmware.
+
+The audio server will be implemented on an Ubuntu server (192.168.5.75 WiFi) that is actually the STT/LLM/TTS back end for multiple smart speakers. It will typically be streaming TTS and stereo music from a Jellyfin media player implemented on another host on the LAN. The server development is a separate requirement.
+
+The initial sound client will be an ESP32-S3 N8R2 with PCM5102A DAC, which will drive amplified PC type speakers.
+
+The NTP server whose role is described below will be a GNSS time synchronised NTP server on the local lan at 192.168.5.4, so latency should be very low and similar for all LAN connected smart speakers.
+
+All communications is to be via the local WiFi network
+
+The project will be developed on an Ubuntu desktop host using vscode/platformio 
+
+We will be using elegantOTA for OTA updates, which uses platformio libraries
+	esp32async/AsyncTCP@^3.3.7
+	ayushsharma82/ElegantOTA@^3.1.7
+With a build flag: 	-DELEGANTOTA_USE_ASYNC_WEBSERVER=1
+
+Key design objective:
+- deterministic synchronized playback between speakers
+- simple architecture
+- robustness on WiFi LAN
+- coexistence with microWakeWord
+- low implementation complexity compared with Snapcast
+
+The system uses:
+- local GNSS-disciplined NTP server
+- absolute wall-clock synchronized playback
+- PCM audio streams
+- lightweight UDP transport
+- slow playback phase correction
+
+======================================================================
+HIGH LEVEL ARCHITECTURE
+======================================================================
+
+Server (implemented separately):
+- streams PCM audio blocks over UDP
+- includes absolute presentation timestamps
+- all timestamps based on shared NTP wall clock
+
+ESP32-S3 clients:
+- receive UDP PCM packets
+- maintain jitter buffer
+- schedule playback according to NTP time
+- continuously estimate playback phase
+- gently correct long-term drift
+- output synchronized audio via I2S DAC
+
+======================================================================
+IMPORTANT DESIGN PRINCIPLES
+======================================================================
+
+1. DO NOT IMPLEMENT SNAPCAST-LIKE COMPLEXITY
+
+Avoid:
+- dynamic latency estimation
+- server/client clock inference
+- complex adaptive buffering
+- codec synchronization logic
+- Linux-style audio pipelines
+- heavyweight RTP stacks
+
+Use:
+- fixed PCM sample rate
+- fixed playback latency
+- explicit wall-clock presentation timestamps
+- lightweight synchronization
+
+2. AUDIO TIMELINE MODEL
+
+Playback synchronization is based on:
+
+    sample_position <-> wall_clock_time
+
+The system does NOT require markers embedded in the audio track.
+
+For PCM:
+    playback_time = sample_count / sample_rate
+
+Example:
+    48,000 samples/sec
+    sample 48000 = exactly 1 second after stream epoch
+
+Each client maintains:
+- playback sample counter
+- stream epoch time
+- mapping between sample position and NTP time
+
+3. SHARED STREAM EPOCH
+
+All clients MUST agree on:
+
+    sample 0 occurs at wall-clock time X
+
+Example:
+    stream_epoch_time = 12:00:10.000 UTC
+
+Playback begins only when:
+    local NTP time >= stream_epoch_time
+
+Packets may arrive earlier and be buffered.
+
+This is scheduled playback, NOT immediate playback.
+
+4. SYNCHRONIZATION MODEL
+
+The system uses:
+- shared NTP wall clock
+- local playback sample tracking
+- slow phase correction
+
+Each client periodically computes:
+
+    expected_playback_time =
+        stream_epoch_time +
+        (playback_sample_counter / sample_rate)
+
+Then:
+
+    phase_error =
+        actual_NTP_time - expected_playback_time
+
+Correction MUST be:
+- slow
+- low-pass filtered
+- gradual
+- stable
+
+DO NOT apply instantaneous corrections.
+
+Target:
+- convergence over several seconds
+- no audible artifacts
+
+5. DRIFT CORRECTION
+
+ESP32 DAC clocks will drift slightly relative to wall clock.
+
+The system MUST correct this gradually.
+
+INITIAL IMPLEMENTATION:
+Use occasional sample insertion/removal:
+- duplicate sample occasionally
+- or drop sample occasionally
+
+This is acceptable because correction rates are extremely low.
+
+Later enhancement:
+- adaptive fractional resampler
+
+DO NOT initially attempt:
+- dynamic I2S clock changes
+- APLL manipulation
+- hardware PLL synchronization
+
+6. PLAYBACK REFERENCE
+
+Synchronization MUST use:
+- actual DAC playback position
+
+NOT:
+- packet receive timing
+
+Track:
+- samples actually fed to I2S DMA
+- minus queued DMA samples if possible
+
+This represents:
+    actual audio emerging from DAC
+
+======================================================================
+ESP32 SOFTWARE ARCHITECTURE
+======================================================================
+
+Framework:
+- Arduino framework under PlatformIO
+- selective use of ESP-IDF APIs allowed
+
+Core libraries:
+- Arduino Audio Tools
+- native ESP-IDF I2S driver
+- lwIP UDP networking
+- esp_timer
+
+Avoid:
+- full ESP-ADF application architecture
+- full Snapcast client
+- heavyweight RTP frameworks
+
+======================================================================
+SUGGESTED TASK STRUCTURE
+======================================================================
+
+Task: Network Receiver
+Responsibilities:
+- receive UDP audio packets
+- validate packet sequence
+- extract presentation timestamps
+- place PCM blocks into jitter buffer
+
+Task: Playback Scheduler
+Responsibilities:
+- monitor NTP wall clock
+- determine target playback position
+- release audio blocks to playback pipeline at correct time
+
+Task: Audio Output
+Responsibilities:
+- maintain continuous I2S DMA feed
+- track playback sample counter
+- provide actual playback position estimate
+
+Task: Synchronization Controller
+Responsibilities:
+- periodically compare:
+      expected playback time
+      vs actual wall clock
+- low-pass filter phase error
+- apply gentle correction
+- maintain long-term synchronization
+
+Task: microWakeWord
+Responsibilities:
+- independent wake-word processing
+- MUST coexist cleanly with audio system
+
+======================================================================
+NETWORK TRANSPORT
+======================================================================
+
+INITIAL IMPLEMENTATION:
+- UDP unicast preferred
+- PCM audio blocks
+- simple packet structure
+
+Packet should include:
+- stream ID
+- sequence number
+- presentation timestamp
+- PCM payload
+
+Avoid initially:
+- multicast
+- compression
+- complex RTP implementations
+
+Multicast may be added later if network equipment behaves well.
+
+======================================================================
+PCM FORMAT
+======================================================================
+
+Initial format:
+- 48 kHz
+- 16-bit signed PCM
+- stereo
+
+Reason:
+- deterministic timing
+- simple synchronization
+- no codec delay complications
+
+======================================================================
+JITTER BUFFER
+======================================================================
+
+Use:
+- fixed-latency jitter buffer
+
+Initial recommended latency:
+- 50–150 ms steady-state
+- larger initial startup buffer allowed
+
+Buffer must:
+- tolerate WiFi jitter
+- tolerate packet reordering
+- tolerate temporary scheduling delays
+
+Playback should continue smoothly even with moderate network jitter.
+
+======================================================================
+TIMING
+======================================================================
+
+Use:
+- local GNSS-disciplined NTP server
+
+Clients should:
+- periodically synchronize time
+- maintain monotonic playback scheduling
+- avoid direct dependence on packet arrival timing
+
+NTP sampling should:
+- use multiple measurements
+- median or filtered timing estimates preferred
+
+======================================================================
+IMPORTANT IMPLEMENTATION NOTES
+======================================================================
+
+1. This is fundamentally a synchronized DAC playback appliance.
+
+2. Deterministic behavior is preferred over feature richness.
+
+3. Stability is more important than ultra-low latency.
+
+4. Start simple:
+- PCM only
+- unicast only
+- sample-slip correction only
+
+5. Optimize later only if required:
+- Opus
+- multicast
+- adaptive resampler
+- advanced drift correction
+
+6. Avoid introducing unnecessary ecosystem complexity.
+
+7. The architecture should remain understandable and debuggable.
+
+8. All synchronization logic should remain lightweight and explicit.
+
+======================================================================
+SUCCESS CRITERIA
+======================================================================
+
+- stable synchronized playback across multiple ESP32-S3 speakers
+- synchronization accuracy subjectively tight in normal rooms
+- robust operation on consumer WiFi
+- coexistence with microWakeWord
+- no audible clicks/glitches during correction
+- deterministic recovery after reconnect/reboot
+- maintainable codebase
+
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Further details for initial device
+
+wifi ssid and password are provided in secrets.h
+
+platformio.ini
+ini[platformio]
+default_envs = syncstreamer
+
+[env:syncstreamer]
+platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+board = esp32-s3-devkitc-1
+framework = arduino
+board_build.arduino.memory_type = qio_qspi
+board_build.flash_mode = qio
+board_build.psram_type = qio
+board_upload.flash_size = 8MB
+board_upload.maximum_size = 8388608
+board_build.partitions = partitions.csv
+monitor_speed = 115200
+upload_port = /dev/ttyACM0
+monitor_port = /dev/ttyACM0
+upload_speed = 921600
+build_flags =
+    -DBOARD_HAS_PSRAM
+    -DARDUINO_USB_MODE=1
+    -DARDUINO_USB_CDC_ON_BOOT=1
+    -DCORE_DEBUG_LEVEL=3
+    -DELEGANTOTA_USE_ASYNC_WEBSERVER=1
+lib_deps =
+    ayushsharma82/ElegantOTA@^3.1.7
+    esp32async/AsyncTCP@^3.3.7
+
+
+Partition Table (partitions.csv)
+# Name,   Type, SubType, Offset,   Size,      Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+otadata,  data, ota,     0xf000,   0x2000,
+phy_init, data, phy,     0x11000,  0x1000,
+ota_0,    app,  ota_0,   0x20000,  0x200000,
+ota_1,    app,  ota_1,   0x220000, 0x200000,
+spiffs,   data, spiffs,  0x420000, 0x3E0000,
+
+
+
+// Configure I2S for PCM5102A
+bck = 15
+ws =16
+data = 17
+unmute DAC = 10 (unmute is high)
+
+expected 48000 sample rate
+bits per sample 16
+
+
