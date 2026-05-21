@@ -16,3 +16,8 @@
 // FreeRTOS task bodies. Create from main.cpp.
 void wifi_rx_task(void* pvParam);
 void ctrl_rx_task(void* pvParam);
+
+// Reset stream sequence tracking. Call on STREAM_START, STREAM_STOP,
+// and when entering ACQUIRING state. Avoids spurious seq_gaps on
+// track change when the server resets its sequence counter.
+void network_receiver_stream_reset(void);

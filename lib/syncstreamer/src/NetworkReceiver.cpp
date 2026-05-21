@@ -9,6 +9,17 @@
 #include <lwip/sockets.h>
 #include <string.h>
 
+// ── Stream sequence tracking (file-scope, reset across streams) ──
+static uint32_t s_last_seq = 0;
+static bool     s_first    = true;
+
+void network_receiver_stream_reset(void)
+{
+    s_last_seq = 0;
+    s_first    = true;
+    g_seq_gaps = 0;
+}
+
 // ── wifi_rx_task — audio packets (port 5005) ──────────────────────────────────
 void wifi_rx_task(void* pvParam)
 {
@@ -31,8 +42,6 @@ void wifi_rx_task(void* pvParam)
     log_i("wifi_rx: listening UDP %u", NET_AUDIO_PORT);
 
     static SyncPacket pkt;
-    uint32_t last_seq = 0;
-    bool     first    = true;
 
     for (;;) {
         int n = lwip_recv(sock, &pkt, sizeof(pkt), 0);
@@ -42,8 +51,8 @@ void wifi_rx_task(void* pvParam)
 
         // Track sequence gaps — count silently; suppress per-gap log spam
         // which causes audio glitches by flooding the serial output at high rate.
-        if (!first) {
-            uint32_t expected = last_seq + 1;
+        if (!s_first) {
+            uint32_t expected = s_last_seq + 1;
             if (pkt.sequence != expected) {
                 uint32_t gap = pkt.sequence - expected;
                 g_seq_gaps += gap;
@@ -54,8 +63,8 @@ void wifi_rx_task(void* pvParam)
                 }
             }
         }
-        last_seq = pkt.sequence;
-        first    = false;
+        s_last_seq = pkt.sequence;
+        s_first    = false;
 
         // Update server clock offset estimator.
         offset_update(pkt.present_us);
@@ -103,9 +112,11 @@ void ctrl_rx_task(void* pvParam)
 
         if (strncmp(buf, "STREAM_START", 12) == 0) {
             log_i("ctrl_rx: STREAM_START");
+            network_receiver_stream_reset();
             g_stream_active = true;   // sync_task will notice and transition IDLE→ACQUIRING
         } else if (strncmp(buf, "STREAM_STOP", 11) == 0) {
             log_i("ctrl_rx: STREAM_STOP");
+            network_receiver_stream_reset();
             g_state = ST_IDLE;
             jb_flush();
             audio_out_mute();

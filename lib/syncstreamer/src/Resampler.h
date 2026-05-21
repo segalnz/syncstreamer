@@ -17,6 +17,7 @@
 struct resampler_t {
     float   phase;       // 0.0 – <1.0  (fractional position between prev and next)
     int16_t prev[2];     // last consumed frame [L, R]
+    float   amplitude;   // crossfade amplitude 0.0–1.0 for gap concealment
 };
 
 // Initialise / reset the resampler (zeroes phase and prev).

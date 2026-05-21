@@ -93,7 +93,7 @@ void audio_out_task(void* pvParam)
     TickType_t xLastWake = xTaskGetTickCount();
 
     for (;;) {
-        bool play = (g_state == ST_LOCKED || g_state == ST_RECOVERING) && !g_muted;
+        bool play = (g_state == ST_ACQUIRING || g_state == ST_LOCKED || g_state == ST_RECOVERING) && !g_muted;
 
         if (play) {
             for (uint32_t i = 0; i < AO_DMA_FRAMES; i++) {

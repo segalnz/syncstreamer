@@ -3,6 +3,7 @@
 #include "OffsetEstimator.h"
 #include "AudioOutput.h"
 #include "Resampler.h"
+#include "NetworkReceiver.h"
 #include <Arduino.h>
 #include <math.h>
 
@@ -76,6 +77,7 @@ static void state_machine_tick(void)
         // at boot, without needing a STREAM_START control message.
         if (g_stream_active || occ > 0) {
             g_stream_active = false;
+            network_receiver_stream_reset();
             // Sync read head to current write position so the ring starts
             // filling from "now" — avoids the read head being stranded at 0
             // while valid data is at frame positions in the millions.
