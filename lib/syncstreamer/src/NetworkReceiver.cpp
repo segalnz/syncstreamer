@@ -9,15 +9,25 @@
 #include <lwip/sockets.h>
 #include <string.h>
 
+// ── Per-stream packet counters ────────────────────────────────────
+volatile uint32_t g_rx_packets = 0;     // valid audio packets received this stream
+volatile uint32_t g_rx_missed  = 0;     // seq gaps (= packets we know we lost)
+
+// Declared in Resampler.h
+extern volatile uint32_t g_dropout_frames;
+
 // ── Stream sequence tracking (file-scope, reset across streams) ──
 static uint32_t s_last_seq = 0;
 static bool     s_first    = true;
 
 void network_receiver_stream_reset(void)
 {
-    s_last_seq = 0;
-    s_first    = true;
-    g_seq_gaps = 0;
+    s_last_seq       = 0;
+    s_first          = true;
+    g_seq_gaps       = 0;
+    g_rx_packets     = 0;
+    g_rx_missed      = 0;
+    g_dropout_frames = 0;
 }
 
 // ── wifi_rx_task — audio packets (port 5005) ──────────────────────────────────
@@ -49,6 +59,8 @@ void wifi_rx_task(void* pvParam)
 
         if ((size_t)n != SYNC_PACKET_SIZE || pkt.magic != SYNC_MAGIC) continue;
 
+        g_rx_packets++;
+
         // Track sequence gaps — count silently; suppress per-gap log spam
         // which causes audio glitches by flooding the serial output at high rate.
         if (!s_first) {
@@ -56,6 +68,7 @@ void wifi_rx_task(void* pvParam)
             if (pkt.sequence != expected) {
                 uint32_t gap = pkt.sequence - expected;
                 g_seq_gaps += gap;
+                g_rx_missed += gap;
                 // Only log large bursts of loss to avoid serial flooding.
                 if (gap >= 10) {
                     log_w("wifi_rx: large seq gap %u→%u (%u lost)",

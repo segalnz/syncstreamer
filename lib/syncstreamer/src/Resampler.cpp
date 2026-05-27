@@ -8,23 +8,27 @@ extern volatile float g_rate_ppm;
 
 #define CONCEAL_FADE_FRAMES 240   // ~5ms at 48 kHz — smooth fade in/out
 
+volatile uint32_t g_dropout_frames = 0;
 resampler_t g_resampler;
 
 void resampler_init(resampler_t* rs)
 {
-    rs->phase      = 0.0f;
-    rs->prev[0]    = 0;
-    rs->prev[1]    = 0;
-    rs->amplitude  = 1.0f;
+    rs->phase             = 0.0f;
+    rs->prev[0]           = 0;
+    rs->prev[1]           = 0;
+    rs->amplitude         = 1.0f;
+    rs->rate_ppm_filtered = 0.0f;
+    rs->conceal_phase     = 0;
+    g_dropout_frames      = 0;
 }
 
 bool resampler_get_frame(resampler_t* rs, int16_t* out_l, int16_t* out_r)
 {
-    static uint32_t s_conceal_count = 0;   // consecutive concealed frames
-    static bool     s_concealing    = false;
-
-    // Advance phase by one output frame worth.
-    rs->phase += 1.0f + g_rate_ppm * 1e-6f;
+    // Copy volatile g_rate_ppm once to avoid torn reads from sync_task preemption.
+    float target_ppm = g_rate_ppm;
+    // Slow IIR: alpha = 0.0007 → τ ≈ 30 ms at 48 kHz
+    rs->rate_ppm_filtered += (target_ppm - rs->rate_ppm_filtered) * 0.0007f;
+    rs->phase += 1.0f + rs->rate_ppm_filtered * 1e-6f;
 
     bool valid = true;
 
@@ -58,32 +62,36 @@ bool resampler_get_frame(resampler_t* rs, int16_t* out_l, int16_t* out_r)
         *out_r = rs->prev[1];
     }
 
-    // ── Crossfade gap concealment ─────────────────────────────────
+    // ── Linear crossfade gap concealment ──────────────────────────
+    // conceal_phase > 0: fade-out (counts 1..CONCEAL_FADE_FRAMES, amplitude → 0)
+    // conceal_phase < 0: fade-in  (counts -1..-CONCEAL_FADE_FRAMES, amplitude → 1)
+    // conceal_phase = 0: normal playback
     if (!frame_valid) {
-        // Entering or continuing concealment.
-        if (!s_concealing) {
-            s_concealing    = true;
-            s_conceal_count = 0;
-        }
-        s_conceal_count++;
-        // Fade out: linear ramp from current amplitude toward 0 over CONCEAL_FADE_FRAMES.
-        if (s_conceal_count < CONCEAL_FADE_FRAMES) {
-            float fade = 1.0f - (float)s_conceal_count / (float)CONCEAL_FADE_FRAMES;
-            rs->amplitude = rs->amplitude * 0.9f + fade * 0.1f;  // smoothing
-            if (rs->amplitude < 0.0f) rs->amplitude = 0.0f;
+        if (rs->conceal_phase <= 0) {
+            rs->conceal_phase = 1;          // start fade-out
         } else {
+            rs->conceal_phase++;            // continue fade-out
+        }
+        if (rs->conceal_phase >= CONCEAL_FADE_FRAMES) {
             rs->amplitude = 0.0f;
-        }
-    } else if (s_concealing) {
-        // Exiting concealment: fade back in.
-        if (s_conceal_count > 0) {
-            float fade_in = 1.0f - (float)s_conceal_count / (float)CONCEAL_FADE_FRAMES;
-            rs->amplitude = rs->amplitude * 0.9f + (1.0f - fade_in) * 0.1f;
-            if (rs->amplitude > 1.0f) rs->amplitude = 1.0f;
-            s_conceal_count--;
         } else {
-            rs->amplitude = 1.0f;
-            s_concealing  = false;
+            rs->amplitude = 1.0f - (float)rs->conceal_phase / (float)CONCEAL_FADE_FRAMES;
+        }
+        g_dropout_frames++;
+    } else if (rs->conceal_phase > 0) {
+        // Exiting concealment — start fade-in from current position.
+        // Use the same number of frames for fade-in as were used for fade-out
+        // (capped at CONCEAL_FADE_FRAMES).
+        rs->conceal_phase = -rs->conceal_phase;   // negative = fading in
+    } else if (rs->conceal_phase < 0) {
+        rs->conceal_phase++;                      // count toward zero
+        if (rs->conceal_phase >= 0) {
+            rs->conceal_phase = 0;
+            rs->amplitude     = 1.0f;
+        } else {
+            float t = (float)(-rs->conceal_phase) / (float)CONCEAL_FADE_FRAMES;
+            if (t > 1.0f) t = 1.0f;
+            rs->amplitude = 1.0f - t;             // ramp from 0 → 1
         }
     } else {
         rs->amplitude = 1.0f;

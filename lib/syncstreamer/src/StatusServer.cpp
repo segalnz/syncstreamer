@@ -2,6 +2,13 @@
 #include "SyncController.h"
 #include "JitterBuffer.h"
 #include "OffsetEstimator.h"
+#include "Resampler.h"           // g_dropout_frames
+#include "NetworkReceiver.h"     // g_rx_packets, g_rx_missed
+
+// Packet tracking globals — defined in NetworkReceiver.cpp
+extern volatile uint32_t g_rx_packets;
+extern volatile uint32_t g_rx_missed;
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ElegantOTA.h>
@@ -116,8 +123,12 @@ function update(){
       row('Offset',d.offset_us+'&thinsp;µs')+
       row('Mode',d.mode.toUpperCase());
     // Stats
+    const mp=Math.round(d.rx_missed/(d.rx_packets||1)*1000)/10;
+    const mc=mp>1?'err':mp>0.1?'warn':'';
     document.getElementById('d_stat').innerHTML=
-      row('Occupancy',d.occ_frames+' fr')+
+      row('Packets',d.rx_packets)+
+      row('Missed',d.rx_missed+'  ('+mp+'%)',mc)+
+      row('Dropouts',d.dropout_fr+' fr',d.dropout_fr?'warn':'')+
       row('Stalled',d.stalled?'YES':'no',d.stalled?'err':'');
     // Config
     document.getElementById('c_mode').value=d.mode;
@@ -158,7 +169,7 @@ void status_server_init(AsyncWebServer* server)
         int  sn = (int)g_state;
         if (sn < 0 || sn > 4) sn = 0;
 
-        char buf[512];
+        char buf[640];
         snprintf(buf, sizeof(buf),
             "{"
             "\"state\":%d,\"ip\":\"%s\",\"ssid\":\"%s\","
@@ -166,6 +177,7 @@ void status_server_init(AsyncWebServer* server)
             "\"fill_ms\":%u,\"target_ms\":%u,\"occ_frames\":%u,"
             "\"rate_ppm\":%.2f,\"filtered_err\":%.2f,"
             "\"offset_us\":%lld,\"seq_gaps\":%u,"
+            "\"rx_packets\":%u,\"rx_missed\":%u,\"dropout_fr\":%u,"
             "\"ducked\":%s,\"stalled\":%s,\"mode\":\"%s\""
             "}",
             sn,
@@ -180,6 +192,9 @@ void status_server_init(AsyncWebServer* server)
             (float)g_filtered_err,
             g_offset_us,
             g_seq_gaps,
+            g_rx_packets,
+            g_rx_missed,
+            g_dropout_frames,
             g_ducked  ? "true" : "false",
             jb_stalled() ? "true" : "false",
             mode_str
@@ -231,15 +246,17 @@ void status_server_loop(AsyncWebServer* /*server*/)
         int sn = (int)g_state;
         if (sn < 0 || sn > 4) sn = 0;
 
-        char payload[256];
+        char payload[320];
         snprintf(payload, sizeof(payload),
             "{\"state\":\"%s\",\"fill_ms\":%u,\"rate_ppm\":%.2f,"
-            "\"offset_us\":%lld,\"seq_gaps\":%u,\"rssi\":%d,\"uptime_s\":%lu}",
+            "\"offset_us\":%lld,\"seq_gaps\":%u,\"dropout_fr\":%u,"
+            "\"rssi\":%d,\"uptime_s\":%lu}",
             state_name[sn],
             jb_occupancy_ms(),
             (float)g_rate_ppm,
             g_offset_us,
             g_seq_gaps,
+            g_dropout_frames,
             WiFi.RSSI(),
             (unsigned long)(esp_timer_get_time() / 1000000ULL)
         );
