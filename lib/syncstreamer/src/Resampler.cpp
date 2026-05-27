@@ -77,7 +77,7 @@ bool resampler_get_frame(resampler_t* rs, int16_t* out_l, int16_t* out_r)
         } else {
             rs->amplitude = 1.0f - (float)rs->conceal_phase / (float)CONCEAL_FADE_FRAMES;
         }
-        g_dropout_frames++;
+        g_dropout_frames += 1;
     } else if (rs->conceal_phase > 0) {
         // Exiting concealment — start fade-in from current position.
         // Use the same number of frames for fade-in as were used for fade-out

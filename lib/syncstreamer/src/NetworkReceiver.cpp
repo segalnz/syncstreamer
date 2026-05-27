@@ -60,7 +60,7 @@ void wifi_rx_task(void* pvParam)
 
         if ((size_t)n != SYNC_PACKET_SIZE || pkt.magic != SYNC_MAGIC) continue;
 
-        g_rx_packets++;
+        g_rx_packets += 1;
 
         // Track sequence gaps — count silently; suppress per-gap log spam
         // which causes audio glitches by flooding the serial output at high rate.
@@ -70,10 +70,15 @@ void wifi_rx_task(void* pvParam)
                 uint32_t gap = pkt.sequence - expected;
                 g_seq_gaps += gap;
                 g_rx_missed += gap;
-                // Only log large bursts of loss to avoid serial flooding.
+                // Rate-limit large-gap warnings to avoid serial flood → I2S underruns.
                 if (gap >= 10) {
-                    log_w("wifi_rx: large seq gap %u→%u (%u lost)",
-                          expected, pkt.sequence, gap);
+                    static uint32_t s_last_gap_log = 0;
+                    uint32_t now = millis();
+                    if (now - s_last_gap_log >= 5000) {
+                        s_last_gap_log = now;
+                        log_w("wifi_rx: large seq gap %u→%u (%u lost)",
+                              expected, pkt.sequence, gap);
+                    }
                 }
             }
         }
