@@ -34,6 +34,19 @@ void sync_controller_init(void)
 void on_duck_start(void) { g_ducked = true;  log_i("SyncCtrl: duck start"); }
 void on_duck_end(void)   { g_ducked = false; log_i("SyncCtrl: duck end");   }
 
+// ── Feed-forward state (file-scope) ──────────────────────────────────────────
+static int64_t  s_last_ff_offset = 0;
+static int64_t  s_last_ff_time   = 0;
+static float    s_ff_ppm         = 0.0f;
+
+// Must be called whenever g_rate_ppm is zeroed.
+static void ff_reset(void)
+{
+    s_last_ff_offset = 0;
+    s_last_ff_time   = 0;
+    s_ff_ppm         = 0.0f;
+}
+
 // ── PLL update (called each tick) ────────────────────────────────────────────
 static void pll_update(void)
 {
@@ -41,7 +54,23 @@ static void pll_update(void)
 
     g_filtered_err = 0.85f * g_filtered_err + 0.15f * err;
 
-    float raw_ppm = g_filtered_err * 0.1f;
+    // Feed-forward term: instantaneous PPM from server clock offset drift.
+    int64_t off    = g_offset_us;
+    int64_t dt_us  = esp_timer_get_time() - s_last_ff_time;
+    if (dt_us > 0 && dt_us < 500000) {
+        float inst_ppm = (float)(off - s_last_ff_offset) * 1e6f / (float)dt_us;
+        s_ff_ppm += 0.4f * (inst_ppm - s_ff_ppm);
+    } else if (dt_us == 0) {
+        // First tick — seed with whatever raw_ppm was computed.
+    }
+    s_last_ff_offset = off;
+    s_last_ff_time   = esp_timer_get_time();
+
+    float fb_ppm = g_filtered_err * 0.1f;
+
+    // Disable feed-forward when occupancy error exceeds ±50 % of target
+    // (transient network jitter spikes are not permanently integrated).
+    float raw_ppm = (err > -1440.0f && err < 1440.0f) ? (s_ff_ppm + fb_ppm) : fb_ppm;
 
     // Rate-of-change damping.
     float prev_ppm = g_rate_ppm;
@@ -85,6 +114,7 @@ static void state_machine_tick(void)
             resampler_init(&g_resampler);
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
+            ff_reset();
             g_state = ST_ACQUIRING;
             log_i("SyncCtrl: IDLE → ACQUIRING");
         }
@@ -112,6 +142,7 @@ static void state_machine_tick(void)
             resampler_init(&g_resampler);
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
+            ff_reset();
             g_state = ST_REACQUIRING;
             log_w("SyncCtrl: LOCKED → REACQUIRING (occ=%u, stall=%d)", occ, stall);
         } else if (occ < lo || occ > hi) {
@@ -128,6 +159,7 @@ static void state_machine_tick(void)
             resampler_init(&g_resampler);
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
+            ff_reset();
             g_state = ST_REACQUIRING;
             log_w("SyncCtrl: RECOVERING → REACQUIRING (occ=%u, stall=%d)", occ, stall);
         } else if (occ >= lo && occ <= hi) {
@@ -142,6 +174,7 @@ static void state_machine_tick(void)
             audio_out_unmute();
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
+            ff_reset();
             g_state = ST_LOCKED;
             log_i("SyncCtrl: REACQUIRING → LOCKED (occ=%u frames)", occ);
         } else if (stall) {
