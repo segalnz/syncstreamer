@@ -28,6 +28,7 @@ void network_receiver_stream_reset(void)
     g_rx_packets     = 0;
     g_rx_missed      = 0;
     g_dropout_frames = 0;
+    offset_estimator_reset();
 }
 
 // ── wifi_rx_task — audio packets (port 5005) ──────────────────────────────────

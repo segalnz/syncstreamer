@@ -19,6 +19,10 @@
 // Initialise internal state. Must be called before any other function.
 void offset_estimator_init(void);
 
+// Reset the ring buffer and g_offset_us. Call on stream start so stale
+// offset samples from the previous stream don't pollute the new stream.
+void offset_estimator_reset(void);
+
 // Update offset estimate with a new measurement from a received packet.
 // present_us = SyncPacket.present_us (server timestamp of packet frame 0).
 void offset_update(uint64_t present_us);

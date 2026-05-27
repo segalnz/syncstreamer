@@ -9,7 +9,7 @@ static bool             s_filled    = false;
 
 volatile int64_t g_offset_us = 0;
 
-void offset_estimator_init(void)
+void offset_estimator_reset(void)
 {
     for (uint32_t i = 0; i < OFFSET_RING_SIZE; i++) {
         s_ring[i] = INT64_MAX;
@@ -17,6 +17,11 @@ void offset_estimator_init(void)
     s_idx    = 0;
     s_filled = false;
     g_offset_us = 0;
+}
+
+void offset_estimator_init(void)
+{
+    offset_estimator_reset();
 }
 
 void offset_update(uint64_t present_us)
