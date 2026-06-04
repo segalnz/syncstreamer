@@ -1,14 +1,15 @@
 #include "AudioOutput.h"
 #include "JitterBuffer.h"
+#include "OffsetEstimator.h"
 #include <Arduino.h>
 #include <string.h>
 
 // Forward declarations — defined in SyncController.cpp / Resampler.cpp
-// (included transitively through main.cpp task creation)
 extern "C" {
     typedef enum { ST_IDLE, ST_ACQUIRING, ST_LOCKED, ST_RECOVERING, ST_REACQUIRING } client_state_t;
     extern volatile client_state_t g_state;
     extern volatile bool           g_muted;
+    extern volatile uint64_t       g_first_present_us;
 }
 // Resampler forward — avoids circular include; Resampler.h included in SyncController
 struct resampler_t;
@@ -88,12 +89,32 @@ void audio_out_unmute(void)
 
 // ── audio_out_task ────────────────────────────────────────────────────────────
 // Core 1, priority 22. Fills one DMA buffer per iteration from resampler or zeros.
+// Presentation-time stall on first LOCKED entry per stream.
+#define BUFFER_FILL_US      ((uint64_t)JB_STARTUP_FRAMES * 1000000ULL / JB_SAMPLE_RATE)
+#define PLAYBACK_LATENCY_US 11000
+
 void audio_out_task(void* pvParam)
 {
     TickType_t xLastWake = xTaskGetTickCount();
+    static bool s_started = false;
 
     for (;;) {
         bool play = (g_state == ST_ACQUIRING || g_state == ST_LOCKED || g_state == ST_RECOVERING) && !g_muted;
+
+        // Presentation-time stall: block output until server's intended
+        // present_us for the first buffered frame.
+        if (!s_started && play && g_first_present_us != 0) {
+            int64_t target = (int64_t)g_first_present_us
+                           + (int64_t)BUFFER_FILL_US
+                           - (int64_t)PLAYBACK_LATENCY_US;
+            if (server_now_us() < target) {
+                play = false;
+            } else {
+                s_started = true;
+            }
+        }
+        if (g_state != ST_LOCKED && g_state != ST_RECOVERING)
+            s_started = false;
 
         if (play) {
             for (uint32_t i = 0; i < AO_DMA_FRAMES; i++) {

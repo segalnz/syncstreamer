@@ -3,10 +3,10 @@
 #include <Arduino.h>
 
 // ── Globals ───────────────────────────────────────────────────────────────────
-static jb_frame_t*       s_ring      = nullptr;
-static SemaphoreHandle_t s_mutex     = nullptr;
-static uint32_t          s_read_head = 0;   // next frame_seq to consume
-static uint32_t          s_write_head = 0;  // one past highest frame_seq written
+static jb_frame_t*         s_ring      = nullptr;
+static SemaphoreHandle_t    s_mutex     = nullptr;
+static volatile uint32_t    s_read_head = 0;   // next frame_seq to consume (shared Core 0↔1)
+static volatile uint32_t    s_write_head = 0;  // one past highest frame_seq written
 
 static int64_t           s_last_write_us = 0;
 
@@ -23,14 +23,17 @@ bool jb_init(void)
 
     size_t bytes = JB_FRAMES * sizeof(jb_frame_t);
     s_ring = static_cast<jb_frame_t*>(
-        heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     if (!s_ring) {
-        log_e("JitterBuffer: PSRAM alloc failed (%u KB)", (unsigned)(bytes / 1024));
-        return false;
+        s_ring = static_cast<jb_frame_t*>(
+            heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!s_ring) { log_e("JitterBuffer: internal+PSRAM alloc failed"); return false; }
+        log_i("JitterBuffer: %u frames, %u KB PSRAM (internal SRAM unavailable)", JB_FRAMES, (unsigned)(bytes / 1024));
+    } else {
+        log_i("JitterBuffer: %u frames, %u KB internal SRAM", JB_FRAMES, (unsigned)(bytes / 1024));
     }
 
     memset(s_ring, 0, bytes);
-    log_i("JitterBuffer: %u frames, %u KB PSRAM", JB_FRAMES, (unsigned)(bytes / 1024));
     return true;
 }
 
@@ -38,17 +41,22 @@ bool jb_init(void)
 void jb_write(uint32_t frame_seq, const int16_t pcm[2])
 {
     uint32_t idx = frame_seq & JB_MASK;
+
+    // Sliding-window guard: if writer laps reader by >1 ring, advance read head
+    // to prevent overwriting live playback data.
+    uint32_t dist = frame_seq - s_read_head;
+    if (dist >= JB_FRAMES) {
+        s_read_head = frame_seq - (JB_FRAMES - 1);
+    }
+
     xSemaphoreTake(s_mutex, portMAX_DELAY);
 
     s_ring[idx].pcm[0] = pcm[0];
     s_ring[idx].pcm[1] = pcm[1];
+    __sync_synchronize();
     s_ring[idx].valid  = true;
 
-    // Advance write head to one past the highest seq written.
-    uint32_t next = frame_seq + 1u;
-    if ((int32_t)(next - s_write_head) > 0) {
-        s_write_head = next;
-    }
+    s_write_head = frame_seq + 1u;
 
     s_last_write_us = esp_timer_get_time();
     xSemaphoreGive(s_mutex);
@@ -56,6 +64,12 @@ void jb_write(uint32_t frame_seq, const int16_t pcm[2])
 
 void jb_write_packet(uint32_t base_frame, const int16_t pcm[512])
 {
+    // Sliding-window guard: check base frame against read head.
+    uint32_t dist = base_frame - s_read_head;
+    if (dist >= JB_FRAMES) {
+        s_read_head = base_frame - (JB_FRAMES - 1);
+    }
+
     xSemaphoreTake(s_mutex, portMAX_DELAY);
 
     for (uint32_t i = 0; i < 256; i++) {
@@ -63,6 +77,7 @@ void jb_write_packet(uint32_t base_frame, const int16_t pcm[512])
         uint32_t idx  = seq & JB_MASK;
         s_ring[idx].pcm[0] = pcm[i * 2];
         s_ring[idx].pcm[1] = pcm[i * 2 + 1];
+        __sync_synchronize();
         s_ring[idx].valid  = true;
 
         uint32_t next = seq + 1u;
@@ -78,9 +93,12 @@ void jb_write_packet(uint32_t base_frame, const int16_t pcm[512])
 // ── Peek ──────────────────────────────────────────────────────────────────────
 jb_frame_t* jb_peek(void)
 {
-    // Called from audio_out_task; no mutex (read_head only moves in same task).
     uint32_t idx = s_read_head & JB_MASK;
+
     if (!s_ring[idx].valid) return nullptr;
+    __sync_synchronize();
+    if (!s_ring[idx].valid) return nullptr;
+
     return &s_ring[idx];
 }
 
@@ -89,7 +107,8 @@ void jb_advance(void)
 {
     uint32_t idx = s_read_head & JB_MASK;
     s_ring[idx].valid = false;
-    s_read_head++;
+    __sync_synchronize();
+    s_read_head += 1;
 }
 
 // ── Occupancy ─────────────────────────────────────────────────────────────────

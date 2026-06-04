@@ -30,5 +30,8 @@ void offset_update(uint64_t present_us);
 // Returns estimated current server time in microseconds.
 int64_t server_now_us(void);
 
+// Relative offset drift since last reset (µs). Used by PLL feed-forward.
+int64_t offset_drift_us(void);
+
 // Raw offset (server_us - local_us). Exposed for status display.
 extern volatile int64_t g_offset_us;
