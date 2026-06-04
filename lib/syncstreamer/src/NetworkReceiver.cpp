@@ -20,10 +20,6 @@ extern volatile uint32_t g_dropout_frames;
 static uint32_t s_last_seq = 0;
 static bool     s_first    = true;
 
-// ── Gap storm tracking ────────────────────────────────────────────
-static uint32_t s_storm_drops = 0;  // packets lost in current storm
-static bool     s_in_storm    = false;
-
 void network_receiver_stream_reset(void)
 {
     s_last_seq       = 0;
@@ -32,8 +28,6 @@ void network_receiver_stream_reset(void)
     g_rx_packets     = 0;
     g_rx_missed      = 0;
     g_dropout_frames = 0;
-    s_storm_drops    = 0;
-    s_in_storm       = false;
     offset_estimator_reset();
 }
 
@@ -76,14 +70,6 @@ void wifi_rx_task(void* pvParam)
                 uint32_t gap = pkt.sequence - expected;
                 g_seq_gaps += gap;
                 g_rx_missed += gap;
-
-                if (!s_in_storm) {
-                    s_in_storm = true;
-                    log_w("wifi_rx: gap storm START (seq %u→%u)",
-                          expected, pkt.sequence);
-                }
-                s_storm_drops += gap;
-
                 // Rate-limit large-gap warnings to avoid serial flood → I2S underruns.
                 if (gap >= 10) {
                     static uint32_t s_last_gap_log = 0;
@@ -94,11 +80,6 @@ void wifi_rx_task(void* pvParam)
                               expected, pkt.sequence, gap);
                     }
                 }
-            } else if (s_in_storm) {
-                s_in_storm = false;
-                log_w("wifi_rx: gap storm END (%u packets lost)",
-                      s_storm_drops);
-                s_storm_drops = 0;
             }
         }
         s_last_seq = pkt.sequence;
