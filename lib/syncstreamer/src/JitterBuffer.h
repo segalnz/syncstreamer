@@ -39,6 +39,12 @@ bool jb_init(void);
 // Write one stereo frame at the given absolute frame sequence number.
 void jb_write(uint32_t frame_seq, const int16_t pcm[2]);
 
+// Write all 256 frames from a SyncPacket at once. Takes the mutex once,
+// eliminating ~255 semaphore operations per packet (from ~48k/sec to ~187/sec).
+// base_frame = pkt.sequence * SYNC_FRAMES_PER_PACKET.
+// pcm[512] = pkt.pcm array (L,R interleaved).
+void jb_write_packet(uint32_t base_frame, const int16_t pcm[512]);
+
 // Peek at the frame at read_head without advancing. Returns pointer into ring
 // (valid until next jb_write to the same slot, i.e. after 8192 frames).
 // Returns nullptr if the slot is not valid.

@@ -54,6 +54,27 @@ void jb_write(uint32_t frame_seq, const int16_t pcm[2])
     xSemaphoreGive(s_mutex);
 }
 
+void jb_write_packet(uint32_t base_frame, const int16_t pcm[512])
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+    for (uint32_t i = 0; i < 256; i++) {
+        uint32_t seq  = base_frame + i;
+        uint32_t idx  = seq & JB_MASK;
+        s_ring[idx].pcm[0] = pcm[i * 2];
+        s_ring[idx].pcm[1] = pcm[i * 2 + 1];
+        s_ring[idx].valid  = true;
+
+        uint32_t next = seq + 1u;
+        if ((int32_t)(next - s_write_head) > 0) {
+            s_write_head = next;
+        }
+    }
+
+    s_last_write_us = esp_timer_get_time();
+    xSemaphoreGive(s_mutex);
+}
+
 // ── Peek ──────────────────────────────────────────────────────────────────────
 jb_frame_t* jb_peek(void)
 {
