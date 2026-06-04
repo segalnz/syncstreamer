@@ -240,6 +240,9 @@ void status_server_loop(AsyncWebServer* /*server*/)
 
     uint32_t now = millis();
     if (now - s_last_mqtt_ms >= MQTT_INTERVAL_MS && s_mqtt.connected()) {
+        // Skip MQTT publish when buffer is low — MQTT TCP competes
+        // with audio UDP for lwIP resources.
+        if (jb_occupancy_frames() < JB_TARGET_FRAMES / 2) return;
         s_last_mqtt_ms = now;
 
         const char* state_name[] = {"idle","acquiring","locked","recovering","reacquiring"};
