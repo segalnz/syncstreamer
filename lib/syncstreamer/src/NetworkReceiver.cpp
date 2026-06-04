@@ -58,7 +58,20 @@ void wifi_rx_task(void* pvParam)
         int n = lwip_recv(sock, &pkt, sizeof(pkt), 0);
         if (n <= 0) continue;
 
-        if ((size_t)n != SYNC_PACKET_SIZE || pkt.magic != SYNC_MAGIC) continue;
+        if ((size_t)n != SYNC_PACKET_SIZE) continue;
+
+        // READY packet: sequence=0, present_us=0. Server sends this on the
+        // audio port to signal the current stream is complete. Ordered with
+        // audio on the same port — no race between control and data.
+        if (pkt.magic == SYNC_MAGIC && pkt.sequence == 0 && pkt.present_us == 0) {
+            network_receiver_stream_reset();
+            g_state = ST_IDLE;
+            jb_flush();
+            audio_out_mute();
+            continue;
+        }
+
+        if (pkt.magic != SYNC_MAGIC) continue;
 
         g_rx_packets += 1;
 
