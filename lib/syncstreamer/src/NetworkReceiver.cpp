@@ -28,6 +28,7 @@ void network_receiver_stream_reset(void)
     g_rx_packets     = 0;
     g_rx_missed      = 0;
     g_dropout_frames = 0;
+    g_first_present_us = 0;
     offset_estimator_reset();
 }
 
@@ -61,6 +62,11 @@ void wifi_rx_task(void* pvParam)
         if ((size_t)n != SYNC_PACKET_SIZE || pkt.magic != SYNC_MAGIC) continue;
 
         g_rx_packets += 1;
+
+        // Capture first packet's present_us for presentation-time stall.
+        if (g_first_present_us == 0) {
+            g_first_present_us = pkt.present_us;
+        }
 
         // Track sequence gaps — count silently; suppress per-gap log spam
         // which causes audio glitches by flooding the serial output at high rate.
