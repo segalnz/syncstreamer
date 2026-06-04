@@ -30,6 +30,12 @@ void sync_controller_init(void)
     g_next_present_us = 0;
 }
 
+// ── TTS detection (called from wifi_rx_task per packet) ────────────────────────
+void sync_controller_set_tts(bool tts)
+{
+    g_mode = tts ? MODE_TTS : MODE_MUSIC;
+}
+
 // ── Duck helpers (called from ctrl_rx_task) ───────────────────────────────────
 void on_duck_start(void) { g_ducked = true;  log_i("SyncCtrl: duck start"); }
 void on_duck_end(void)   { g_ducked = false; log_i("SyncCtrl: duck end");   }
@@ -103,11 +109,10 @@ static void state_machine_tick(void)
     switch (g_state) {
 
     case ST_IDLE:
-        // Transition only on explicit STREAM_START control message.
-        // Removed `occ > 0` trigger — it caused a race during barge-in
-        // where audio packets arriving between STREAM_STOP and STREAM_START
-        // would trigger a premature IDLE→ACQUIRING that discarded data.
-        if (g_stream_active) {
+        // Transition on explicit STREAM_START OR on incoming audio data.
+        // Per-packet TTS detection (high bit) ensures g_mode is correct
+        // before the first audio frame reaches the JB.
+        if (g_stream_active || occ > 0) {
             g_stream_active = false;
             network_receiver_stream_reset();
             // Sync read head to current write position so the ring starts

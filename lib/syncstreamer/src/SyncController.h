@@ -57,6 +57,10 @@ void sync_controller_init(void);
 // FreeRTOS task body. Pin to Core 1, priority 15.
 void sync_task(void* pvParam);
 
+// Called from wifi_rx_task on per-packet TTS flag (seq high bit).
+// Sets g_mode to MODE_TTS or MODE_MUSIC.
+void sync_controller_set_tts(bool tts);
+
 // Called from ctrl_rx_task on DUCK_START / DUCK_END control messages.
 void on_duck_start(void);
 void on_duck_end(void);

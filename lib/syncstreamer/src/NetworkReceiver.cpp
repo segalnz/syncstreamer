@@ -62,12 +62,19 @@ void wifi_rx_task(void* pvParam)
 
         g_rx_packets += 1;
 
+        // Strip TTS flag from sequence number high bit.
+        uint32_t raw_seq = pkt.sequence;
+        bool tts_pkt = (raw_seq & 0x80000000) != 0;
+        uint32_t seq = raw_seq & 0x7FFFFFFF;
+
+        sync_controller_set_tts(tts_pkt);
+
         // Track sequence gaps — count silently; suppress per-gap log spam
         // which causes audio glitches by flooding the serial output at high rate.
         if (!s_first) {
             uint32_t expected = s_last_seq + 1;
-            if (pkt.sequence != expected) {
-                uint32_t gap = pkt.sequence - expected;
+            if (seq != expected) {
+                uint32_t gap = seq - expected;
                 g_seq_gaps += gap;
                 g_rx_missed += gap;
                 // Rate-limit large-gap warnings to avoid serial flood → I2S underruns.
@@ -77,19 +84,19 @@ void wifi_rx_task(void* pvParam)
                     if (now - s_last_gap_log >= 5000) {
                         s_last_gap_log = now;
                         log_w("wifi_rx: large seq gap %u→%u (%u lost)",
-                              expected, pkt.sequence, gap);
+                              expected, seq, gap);
                     }
                 }
             }
         }
-        s_last_seq = pkt.sequence;
+        s_last_seq = seq;
         s_first    = false;
 
         // Update server clock offset estimator.
         offset_update(pkt.present_us);
 
         // Write 256 stereo frames into jitter buffer (single mutex lock).
-        uint32_t base_frame = pkt.sequence * SYNC_FRAMES_PER_PACKET;
+        uint32_t base_frame = seq * SYNC_FRAMES_PER_PACKET;
         jb_write_packet(base_frame, pkt.pcm);
 
         // Store presentation time for ACQUIRING decision.
