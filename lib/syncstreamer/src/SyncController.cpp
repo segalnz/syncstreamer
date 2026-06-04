@@ -16,7 +16,6 @@ volatile bool           g_ducked      = false;
 volatile bool           g_muted       = false;
 volatile bool           g_stream_active = false;
 volatile uint64_t       g_next_present_us = 0;
-volatile uint64_t       g_first_present_us = 0;
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 void sync_controller_init(void)
@@ -29,7 +28,6 @@ void sync_controller_init(void)
     g_muted        = false;
     g_stream_active = false;
     g_next_present_us = 0;
-    g_first_present_us = 0;
 }
 
 // ── Duck helpers (called from ctrl_rx_task) ───────────────────────────────────
