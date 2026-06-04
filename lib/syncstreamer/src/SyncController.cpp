@@ -1,11 +1,12 @@
 #include "SyncController.h"
 #include "JitterBuffer.h"
 #include "OffsetEstimator.h"
-#include "AudioOutput.h"
 #include "Resampler.h"
 #include "NetworkReceiver.h"
+#include "AudioOutput.h"
 #include <Arduino.h>
 #include <math.h>
+#include "esp_timer.h"
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 volatile client_state_t g_state       = ST_IDLE;
@@ -30,54 +31,50 @@ void sync_controller_init(void)
     g_next_present_us = 0;
 }
 
-// ── TTS detection (called from wifi_rx_task per packet) ────────────────────────
-void sync_controller_set_tts(bool tts)
-{
+void sync_controller_set_tts(bool tts) {
     g_mode = tts ? MODE_TTS : MODE_MUSIC;
 }
 
 // ── Duck helpers (called from ctrl_rx_task) ───────────────────────────────────
-void on_duck_start(void) { g_ducked = true;  log_i("SyncCtrl: duck start"); }
-void on_duck_end(void)   { g_ducked = false; log_i("SyncCtrl: duck end");   }
-
-// ── Feed-forward state (file-scope) ──────────────────────────────────────────
-static int64_t  s_last_ff_offset = 0;
-static int64_t  s_last_ff_time   = 0;
-static float    s_ff_ppm         = 0.0f;
-
-// Must be called whenever g_rate_ppm is zeroed.
-static void ff_reset(void)
-{
-    s_last_ff_offset = 0;
-    s_last_ff_time   = 0;
-    s_ff_ppm         = 0.0f;
-}
+void on_duck_start(void) { g_ducked = true; }
+void on_duck_end(void)   { g_ducked = false; }
 
 // ── PLL update (called each tick) ────────────────────────────────────────────
 static void pll_update(void)
 {
+    // ── Feed-forward from clock offset drift ──────────────────────────────
+    // offset_drift_us() is the cumulative server-clock drift relative to
+    // the local crystal since stream start.  Dividing by time-in-stream
+    // gives an instantaneous PPM estimate of the rate mismatch.
+    // We keep a low-passed version of this as the feed-forward term so that
+    // local-crystal / server-clock frequency error is directly compensated.
+    static int64_t s_last_offset  = 0;
+    static int64_t s_last_tick_us = 0;
+    static float   s_ff_ppm       = 0.0f;
+
+    int64_t off   = offset_drift_us();
+    int64_t now   = esp_timer_get_time();
+    int64_t dt_us = now - s_last_tick_us;
+
+    if (s_last_tick_us != 0 && dt_us > 0) {
+        // Instantaneous PPM from offset change over this tick interval.
+        float inst_ppm = (float)(off - s_last_offset) * 1e6f / (float)dt_us;
+        // IIR low-pass (tau ≈ 4 ticks at 5 Hz).
+        s_ff_ppm += 0.4f * (inst_ppm - s_ff_ppm);
+    }
+    s_last_offset  = off;
+    s_last_tick_us = now;
+
+    // ── Buffer-occupancy feedback ─────────────────────────────────────────
     float err = (float)jb_occupancy_frames() - (float)JB_TARGET_FRAMES;
 
     g_filtered_err = 0.85f * g_filtered_err + 0.15f * err;
 
-    // Feed-forward term: instantaneous PPM from server clock offset drift.
-    int64_t off    = g_offset_us;
-    int64_t dt_us  = esp_timer_get_time() - s_last_ff_time;
-    if (dt_us > 0 && dt_us < 500000) {
-        float inst_ppm = (float)(off - s_last_ff_offset) * 1e6f / (float)dt_us;
-        // Reject physically impossible values caused by offset-estimator step changes.
-        if (inst_ppm > -500.0f && inst_ppm < 500.0f) {
-            s_ff_ppm += 0.4f * (inst_ppm - s_ff_ppm);
-        }
-    }
-    s_last_ff_offset = off;
-    s_last_ff_time   = esp_timer_get_time();
-
+    // Proportional term scaled to ppm.
     float fb_ppm = g_filtered_err * 0.1f;
 
-    // Disable feed-forward when occupancy error exceeds ±50 % of target
-    // (transient network jitter spikes are not permanently integrated).
-    float raw_ppm = (err > -1440.0f && err < 1440.0f) ? (s_ff_ppm + fb_ppm) : fb_ppm;
+    // Combine feed-forward + feedback.
+    float raw_ppm = s_ff_ppm + fb_ppm;
 
     // Rate-of-change damping.
     float prev_ppm = g_rate_ppm;
@@ -93,6 +90,13 @@ static void pll_update(void)
     if (new_ppm < -max_ppm) new_ppm = -max_ppm;
 
     g_rate_ppm = new_ppm;
+
+    // Reset feed-forward when occupancy error signals a transient
+    // (e.g. network jitter spike) to avoid integrating it permanently.
+    if (err >  (float)JB_TARGET_FRAMES * 0.5f ||
+        err < -(float)JB_TARGET_FRAMES * 0.5f) {
+        s_ff_ppm = 0.0f;
+    }
 }
 
 // ── State machine tick ────────────────────────────────────────────────────────
@@ -104,25 +108,20 @@ static void state_machine_tick(void)
     uint32_t lo   = (g_mode == MODE_TTS) ? SC_LO_TTS   : SC_LO_MUSIC;
     uint32_t hi   = (g_mode == MODE_TTS) ? SC_HI_TTS   : SC_HI_MUSIC;
     uint32_t crit = (g_mode == MODE_TTS) ? SC_CRIT_TTS : SC_CRIT_MUSIC;
-    uint32_t startup = (g_mode == MODE_TTS) ? JB_STARTUP_FRAMES_TTS : JB_STARTUP_FRAMES;
 
     switch (g_state) {
 
     case ST_IDLE:
-        // Transition on explicit STREAM_START OR on incoming audio data.
-        // Per-packet TTS detection (high bit) ensures g_mode is correct
-        // before the first audio frame reaches the JB.
+        // Transition on explicit server command OR on incoming audio data.
+        // This lets the client lock onto a stream that was already running
+        // at boot, without needing a STREAM_START control message.
         if (g_stream_active || occ > 0) {
             g_stream_active = false;
             network_receiver_stream_reset();
-            // Sync read head to current write position so the ring starts
-            // filling from "now" — avoids the read head being stranded at 0
-            // while valid data is at frame positions in the millions.
             jb_sync_read_head();
             resampler_init(&g_resampler);
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
-            ff_reset();
             g_state = ST_ACQUIRING;
             log_i("SyncCtrl: IDLE → ACQUIRING");
         }
@@ -135,7 +134,7 @@ static void state_machine_tick(void)
             log_w("SyncCtrl: ACQUIRING stalled → IDLE");
             break;
         }
-        if (occ >= startup) {
+        if (occ >= JB_STARTUP_FRAMES) {
             audio_out_unmute();
             g_state = ST_LOCKED;
             log_i("SyncCtrl: ACQUIRING → LOCKED (occ=%u frames)", occ);
@@ -150,7 +149,6 @@ static void state_machine_tick(void)
             resampler_init(&g_resampler);
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
-            ff_reset();
             g_state = ST_REACQUIRING;
             log_w("SyncCtrl: LOCKED → REACQUIRING (occ=%u, stall=%d)", occ, stall);
         } else if (occ < lo || occ > hi) {
@@ -167,7 +165,6 @@ static void state_machine_tick(void)
             resampler_init(&g_resampler);
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
-            ff_reset();
             g_state = ST_REACQUIRING;
             log_w("SyncCtrl: RECOVERING → REACQUIRING (occ=%u, stall=%d)", occ, stall);
         } else if (occ >= lo && occ <= hi) {
@@ -177,12 +174,10 @@ static void state_machine_tick(void)
         break;
 
     case ST_REACQUIRING:
-        // Wait for enough frames to refill, then restart.
-        if (occ >= startup) {
+        if (occ >= JB_STARTUP_FRAMES) {
             audio_out_unmute();
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
-            ff_reset();
             g_state = ST_LOCKED;
             log_i("SyncCtrl: REACQUIRING → LOCKED (occ=%u frames)", occ);
         } else if (stall) {

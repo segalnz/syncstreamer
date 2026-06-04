@@ -13,23 +13,22 @@
 // Ring of JB_FRAMES stereo frames indexed by (frame_seq & (JB_FRAMES-1)).
 // frame_seq = packet_seq * SYNC_FRAMES_PER_PACKET + frame_offset
 //
-// Capacity: 16384 frames = ~341 ms @ 48 kHz  (must exceed JB_STARTUP_FRAMES)
-// Target fill: JB_TARGET_MS = 60 ms
-// Startup fill: JB_STARTUP_MS = 200 ms (used during ST_ACQUIRING)
+// Capacity: 4096 frames = ~85 ms @ 48 kHz  (must exceed JB_STARTUP_FRAMES)
+// Target fill: JB_TARGET_MS = 30 ms
+// Startup fill: JB_STARTUP_MS = 60 ms
 // ============================================================
 
-#define JB_FRAMES        16384u         // must be power of 2; > JB_STARTUP_FRAMES (9600)
+#define JB_FRAMES        4096u          // must be power of 2; > JB_STARTUP_FRAMES (2880)
 #define JB_MASK          (JB_FRAMES - 1)
 #define JB_SAMPLE_RATE   48000u
-#define JB_TARGET_MS     60u
-#define JB_STARTUP_MS    200u
-#define JB_TARGET_FRAMES ((JB_SAMPLE_RATE * JB_TARGET_MS)  / 1000u)   // 2880
-#define JB_STARTUP_FRAMES ((JB_SAMPLE_RATE * JB_STARTUP_MS) / 1000u)  // 9600
-#define JB_STARTUP_FRAMES_TTS ((JB_SAMPLE_RATE * 60u) / 1000u)         // 2880 frames = 60ms for TTS
+#define JB_TARGET_MS     30u
+#define JB_STARTUP_MS    60u
+#define JB_TARGET_FRAMES ((JB_SAMPLE_RATE * JB_TARGET_MS)  / 1000u)   // 1440
+#define JB_STARTUP_FRAMES ((JB_SAMPLE_RATE * JB_STARTUP_MS) / 1000u)  // 2880
 #define JB_STALL_US      500000LL       // 500 ms without a new frame = stalled
 
 struct jb_frame_t {
-    int16_t pcm[2];   // [0]=L, [1]=R
+    volatile int16_t pcm[2];   // [0]=L, [1]=R — volatile for cross-core access
     bool    valid;
 };
 
@@ -40,14 +39,11 @@ bool jb_init(void);
 // Write one stereo frame at the given absolute frame sequence number.
 void jb_write(uint32_t frame_seq, const int16_t pcm[2]);
 
-// Write all 256 frames from a SyncPacket at once. Takes the mutex once,
-// eliminating ~255 semaphore operations per packet (from ~48k/sec to ~187/sec).
-// base_frame = pkt.sequence * SYNC_FRAMES_PER_PACKET.
-// pcm[512] = pkt.pcm array (L,R interleaved).
+// Write all 256 frames from a SyncPacket at once. Takes mutex once.
 void jb_write_packet(uint32_t base_frame, const int16_t pcm[512]);
 
 // Peek at the frame at read_head without advancing. Returns pointer into ring
-// (valid until next jb_write to the same slot, i.e. after 8192 frames).
+// (valid until next jb_write to the same slot, i.e. after 4096 frames).
 // Returns nullptr if the slot is not valid.
 jb_frame_t* jb_peek(void);
 

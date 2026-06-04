@@ -9,25 +9,21 @@
 #include <lwip/sockets.h>
 #include <string.h>
 
-// ── Per-stream packet counters ────────────────────────────────────
-volatile uint32_t g_rx_packets = 0;     // valid audio packets received this stream
-volatile uint32_t g_rx_missed  = 0;     // seq gaps (= packets we know we lost)
-
-// Declared in Resampler.h
-extern volatile uint32_t g_dropout_frames;
-
 // ── Stream sequence tracking (file-scope, reset across streams) ──
 static uint32_t s_last_seq = 0;
 static bool     s_first    = true;
 
+// ── Packet statistics (exposed for dashboard / MQTT) ─────────────
+volatile uint32_t g_rx_packets = 0;
+volatile uint32_t g_rx_missed  = 0;
+
 void network_receiver_stream_reset(void)
 {
-    s_last_seq       = 0;
-    s_first          = true;
-    g_seq_gaps       = 0;
-    g_rx_packets     = 0;
-    g_rx_missed      = 0;
-    g_dropout_frames = 0;
+    s_last_seq  = 0;
+    s_first     = true;
+    g_seq_gaps  = 0;
+    g_rx_packets = 0;
+    g_rx_missed  = 0;
     offset_estimator_reset();
 }
 
@@ -82,19 +78,17 @@ void wifi_rx_task(void* pvParam)
 
         sync_controller_set_tts(tts_pkt);
 
-        // Track sequence gaps — count silently; suppress per-gap log spam
-        // which causes audio glitches by flooding the serial output at high rate.
+        // Track sequence gaps — count silently.
         if (!s_first) {
             uint32_t expected = s_last_seq + 1;
             if (seq != expected) {
                 uint32_t gap = seq - expected;
                 g_seq_gaps += gap;
                 g_rx_missed += gap;
-                // Rate-limit large-gap warnings to avoid serial flood → I2S underruns.
                 if (gap >= 10) {
                     static uint32_t s_last_gap_log = 0;
                     uint32_t now = millis();
-                    if (now - s_last_gap_log >= 5000) {
+                    if (now - s_last_gap_log > 5000) {
                         s_last_gap_log = now;
                         log_w("wifi_rx: large seq gap %u→%u (%u lost)",
                               expected, seq, gap);
@@ -108,7 +102,7 @@ void wifi_rx_task(void* pvParam)
         // Update server clock offset estimator.
         offset_update(pkt.present_us);
 
-        // Write 256 stereo frames into jitter buffer (single mutex lock).
+        // Write 256 stereo frames into jitter buffer (one mutex lock per packet).
         uint32_t base_frame = seq * SYNC_FRAMES_PER_PACKET;
         jb_write_packet(base_frame, pkt.pcm);
 
@@ -122,6 +116,9 @@ void ctrl_rx_task(void* pvParam)
 {
     int sock = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) { log_e("ctrl_rx: socket() failed"); vTaskDelete(nullptr); return; }
+
+    int reuse = 1;
+    lwip_setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
     struct timeval tv = { .tv_sec = 0, .tv_usec = 200000 };
     lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -149,17 +146,13 @@ void ctrl_rx_task(void* pvParam)
         if (strncmp(buf, "STREAM_START", 12) == 0) {
             log_i("ctrl_rx: STREAM_START");
             network_receiver_stream_reset();
-            g_stream_active = true;   // sync_task will notice and transition IDLE→ACQUIRING
+            g_stream_active = true;
         } else if (strncmp(buf, "STREAM_STOP", 11) == 0) {
             log_i("ctrl_rx: STREAM_STOP");
             network_receiver_stream_reset();
             g_state = ST_IDLE;
             jb_flush();
             audio_out_mute();
-        } else if (strncmp(buf, "DUCK_START", 10) == 0) {
-            on_duck_start();
-        } else if (strncmp(buf, "DUCK_END", 8) == 0) {
-            on_duck_end();
         } else if (strncmp(buf, "PING", 4) == 0) {
             lwip_sendto(sock, "PONG", 4, 0,
                         (struct sockaddr*)&sender, slen);

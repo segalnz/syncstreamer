@@ -10,20 +10,14 @@ static int64_t          s_baseline  = 0;
 
 volatile int64_t g_offset_us = 0;
 
-void offset_estimator_reset(void)
+void offset_estimator_init(void)
 {
     for (uint32_t i = 0; i < OFFSET_RING_SIZE; i++) {
         s_ring[i] = INT64_MAX;
     }
     s_idx    = 0;
     s_filled = false;
-    s_baseline = 0;
     g_offset_us = 0;
-}
-
-void offset_estimator_init(void)
-{
-    offset_estimator_reset();
 }
 
 void offset_update(uint64_t present_us)
@@ -47,6 +41,17 @@ void offset_update(uint64_t present_us)
     if (s_baseline == 0 && s_filled) {
         s_baseline = g_offset_us;
     }
+}
+
+void offset_estimator_reset(void)
+{
+    for (uint32_t i = 0; i < OFFSET_RING_SIZE; i++) {
+        s_ring[i] = INT64_MAX;
+    }
+    s_idx     = 0;
+    s_filled  = false;
+    s_baseline = 0;
+    g_offset_us = 0;
 }
 
 int64_t offset_drift_us(void)

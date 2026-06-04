@@ -21,3 +21,7 @@ void ctrl_rx_task(void* pvParam);
 // and when entering ACQUIRING state. Avoids spurious seq_gaps on
 // track change when the server resets its sequence counter.
 void network_receiver_stream_reset(void);
+
+// Packet statistics — exposed for dashboard / MQTT.
+extern volatile uint32_t g_rx_packets;
+extern volatile uint32_t g_rx_missed;

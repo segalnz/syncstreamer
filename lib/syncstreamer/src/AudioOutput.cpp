@@ -4,13 +4,12 @@
 #include <string.h>
 
 // Forward declarations — defined in SyncController.cpp / Resampler.cpp
-// (included transitively through main.cpp task creation)
 extern "C" {
     typedef enum { ST_IDLE, ST_ACQUIRING, ST_LOCKED, ST_RECOVERING, ST_REACQUIRING } client_state_t;
     extern volatile client_state_t g_state;
     extern volatile bool           g_muted;
 }
-// Resampler forward — avoids circular include; Resampler.h included in SyncController
+// Resampler forward — avoids circular include
 struct resampler_t;
 extern resampler_t g_resampler;
 extern bool resampler_get_frame(resampler_t* rs, int16_t* out_l, int16_t* out_r);
@@ -18,18 +17,14 @@ extern bool resampler_get_frame(resampler_t* rs, int16_t* out_l, int16_t* out_r)
 // ── Global I2S channel handle ─────────────────────────────────────────────────
 i2s_chan_handle_t g_i2s_tx = nullptr;
 
-// ── DMA output buffer (512 stereo frames = 2048 bytes) ───────────────────────
+// ── DMA output buffer ─────────────────────────────────────────────────────────
 static int16_t s_dma_buf[AO_DMA_FRAMES * 2];
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 bool audio_out_init(void)
 {
-    // XSMT low = muted while clock starts (prevents pop).
-    pinMode(AO_PIN_XSMT, OUTPUT);
-    digitalWrite(AO_PIN_XSMT, LOW);
-
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    chan_cfg.auto_clear = true;   // zero DMA on underrun
+    chan_cfg.auto_clear = true;
     chan_cfg.dma_desc_num  = AO_DMA_BUFS;
     chan_cfg.dma_frame_num = AO_DMA_FRAMES;
 
@@ -65,15 +60,12 @@ bool audio_out_init(void)
         return false;
     }
 
-    // Clock is now running; safe to unmute.
-    digitalWrite(AO_PIN_XSMT, HIGH);
-
-    log_i("AudioOutput: I2S started — BCLK=%d LRCLK=%d DOUT=%d XSMT=%d",
-          AO_PIN_BCLK, AO_PIN_LRCLK, AO_PIN_DOUT, AO_PIN_XSMT);
+    log_i("AudioOutput: I2S started — BCLK=%d LRCLK=%d DOUT=%d",
+          AO_PIN_BCLK, AO_PIN_LRCLK, AO_PIN_DOUT);
     return true;
 }
 
-// ── Mute / Unmute ─────────────────────────────────────────────────────────────
+// ── Mute / Unmute (XSMT pin for PCM5102A) ─────────────────────────────────────
 void audio_out_mute(void)
 {
     digitalWrite(AO_PIN_XSMT, LOW);

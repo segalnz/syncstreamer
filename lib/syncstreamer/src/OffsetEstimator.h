@@ -19,8 +19,7 @@
 // Initialise internal state. Must be called before any other function.
 void offset_estimator_init(void);
 
-// Reset the ring buffer and g_offset_us. Call on stream start so stale
-// offset samples from the previous stream don't pollute the new stream.
+// Reset offset tracking on stream boundaries. Clears ring buffer and zeros g_offset_us.
 void offset_estimator_reset(void);
 
 // Update offset estimate with a new measurement from a received packet.
@@ -30,8 +29,8 @@ void offset_update(uint64_t present_us);
 // Returns estimated current server time in microseconds.
 int64_t server_now_us(void);
 
-// Relative offset drift since last reset (µs). Used by PLL feed-forward.
-int64_t offset_drift_us(void);
-
 // Raw offset (server_us - local_us). Exposed for status display.
 extern volatile int64_t g_offset_us;
+
+// Relative offset drift since last reset (µs). Meaningful status display value.
+int64_t offset_drift_us(void);

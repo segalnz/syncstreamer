@@ -11,16 +11,16 @@
 // When phase crosses 1.0 the read head advances one JB frame.
 // Interpolates linearly between prev and next.
 //
-// Gap concealment: if next frame is invalid, repeats prev.
+// Gap concealment: raised-cosine envelope proportional to a
+// 10 ms fade window.  No lookahead — the cosine curve naturally
+// self-terminates for gaps shorter than the window.
 // ============================================================
 
 struct resampler_t {
-    float   phase;          // 0.0 – <1.0  (fractional position between prev and next)
-    int16_t prev[2];        // last consumed frame [L, R]
-    float   amplitude;      // crossfade amplitude 0.0–1.0 for gap concealment
-    int32_t conceal_phase;  // >0 = currently concealing (rising = fade-out,
-                            //        falling = fade-in via Hann window),
-                            //  0 = not concealing
+    float   phase;       // 0.0 – <1.0  (fractional position between prev and next)
+    int16_t prev[2];     // last consumed frame [L, R]
+    float   amplitude;   // crossfade amplitude 0.0–1.0 for gap concealment
+    int32_t fade_len;    // frames in current fade transition (0 = not fading)
 };
 
 // Initialise / reset the resampler (zeroes phase and prev).
@@ -31,9 +31,9 @@ void resampler_init(resampler_t* rs);
 // Returns true if audio is valid; false if gap-concealing.
 bool resampler_get_frame(resampler_t* rs, int16_t* out_l, int16_t* out_r);
 
-// Dropout-frame counter — incremented every time resampler_get_frame()
-// cannot read from the jitter buffer (buffer underrun).  Reset on stream start.
-extern volatile uint32_t g_dropout_frames;
-
 // Shared instance — defined in Resampler.cpp, used by AudioOutput.cpp.
 extern resampler_t g_resampler;
+
+// Dropout-frame counter — incremented every time resampler_get_frame()
+// cannot read from the jitter buffer. Reset on stream start.
+extern volatile uint32_t g_dropout_frames;
