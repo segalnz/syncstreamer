@@ -103,10 +103,11 @@ static void state_machine_tick(void)
     switch (g_state) {
 
     case ST_IDLE:
-        // Transition on explicit server command OR on incoming audio data.
-        // This lets the client lock onto a stream that was already running
-        // at boot, without needing a STREAM_START control message.
-        if (g_stream_active || occ > 0) {
+        // Transition only on explicit STREAM_START control message.
+        // Removed `occ > 0` trigger — it caused a race during barge-in
+        // where audio packets arriving between STREAM_STOP and STREAM_START
+        // would trigger a premature IDLE→ACQUIRING that discarded data.
+        if (g_stream_active) {
             g_stream_active = false;
             network_receiver_stream_reset();
             // Sync read head to current write position so the ring starts
