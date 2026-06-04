@@ -25,6 +25,7 @@
 #define JB_STARTUP_MS    200u
 #define JB_TARGET_FRAMES ((JB_SAMPLE_RATE * JB_TARGET_MS)  / 1000u)   // 2880
 #define JB_STARTUP_FRAMES ((JB_SAMPLE_RATE * JB_STARTUP_MS) / 1000u)  // 9600
+#define JB_STARTUP_FRAMES_TTS ((JB_SAMPLE_RATE * 60u) / 1000u)         // 2880 frames = 60ms for TTS
 #define JB_STALL_US      500000LL       // 500 ms without a new frame = stalled
 
 struct jb_frame_t {

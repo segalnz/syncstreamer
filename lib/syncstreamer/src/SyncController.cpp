@@ -98,6 +98,7 @@ static void state_machine_tick(void)
     uint32_t lo   = (g_mode == MODE_TTS) ? SC_LO_TTS   : SC_LO_MUSIC;
     uint32_t hi   = (g_mode == MODE_TTS) ? SC_HI_TTS   : SC_HI_MUSIC;
     uint32_t crit = (g_mode == MODE_TTS) ? SC_CRIT_TTS : SC_CRIT_MUSIC;
+    uint32_t startup = (g_mode == MODE_TTS) ? JB_STARTUP_FRAMES_TTS : JB_STARTUP_FRAMES;
 
     switch (g_state) {
 
@@ -128,7 +129,7 @@ static void state_machine_tick(void)
             log_w("SyncCtrl: ACQUIRING stalled → IDLE");
             break;
         }
-        if (occ >= JB_STARTUP_FRAMES) {
+        if (occ >= startup) {
             audio_out_unmute();
             g_state = ST_LOCKED;
             log_i("SyncCtrl: ACQUIRING → LOCKED (occ=%u frames)", occ);
@@ -171,7 +172,7 @@ static void state_machine_tick(void)
 
     case ST_REACQUIRING:
         // Wait for enough frames to refill, then restart.
-        if (occ >= JB_STARTUP_FRAMES) {
+        if (occ >= startup) {
             audio_out_unmute();
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
