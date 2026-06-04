@@ -16,7 +16,6 @@ volatile bool           g_ducked      = false;
 volatile bool           g_muted       = false;
 volatile bool           g_stream_active = false;
 volatile uint64_t       g_next_present_us = 0;
-volatile uint64_t       g_first_present_us = 0;
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 void sync_controller_init(void)
@@ -29,7 +28,6 @@ void sync_controller_init(void)
     g_muted        = false;
     g_stream_active = false;
     g_next_present_us = 0;
-    g_first_present_us = 0;
 }
 
 // ── Duck helpers (called from ctrl_rx_task) ───────────────────────────────────
@@ -56,8 +54,8 @@ static void pll_update(void)
 
     g_filtered_err = 0.85f * g_filtered_err + 0.15f * err;
 
-    // Feed-forward term: instantaneous PPM from relative offset drift.
-    int64_t off    = offset_drift_us();
+    // Feed-forward term: instantaneous PPM from server clock offset drift.
+    int64_t off    = g_offset_us;
     int64_t dt_us  = esp_timer_get_time() - s_last_ff_time;
     if (dt_us > 0 && dt_us < 500000) {
         float inst_ppm = (float)(off - s_last_ff_offset) * 1e6f / (float)dt_us;

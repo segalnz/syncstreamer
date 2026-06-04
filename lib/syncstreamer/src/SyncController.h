@@ -51,10 +51,6 @@ extern volatile bool           g_stream_active; // set by ctrl_rx on STREAM_STAR
 // For ACQUIRING → LOCKED transition: present_us of first expected frame.
 extern volatile uint64_t g_next_present_us;
 
-// First audio packet's present_us captured once per stream.
-// Used by audio_out_task for presentation-time stall on LOCKED entry.
-extern volatile uint64_t g_first_present_us;
-
 // Initialise globals. Call before creating sync_task.
 void sync_controller_init(void);
 
