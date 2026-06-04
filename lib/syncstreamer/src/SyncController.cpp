@@ -59,9 +59,10 @@ static void pll_update(void)
     int64_t dt_us  = esp_timer_get_time() - s_last_ff_time;
     if (dt_us > 0 && dt_us < 500000) {
         float inst_ppm = (float)(off - s_last_ff_offset) * 1e6f / (float)dt_us;
-        s_ff_ppm += 0.4f * (inst_ppm - s_ff_ppm);
-    } else if (dt_us == 0) {
-        // First tick — seed with whatever raw_ppm was computed.
+        // Reject physically impossible values caused by offset-estimator step changes.
+        if (inst_ppm > -500.0f && inst_ppm < 500.0f) {
+            s_ff_ppm += 0.4f * (inst_ppm - s_ff_ppm);
+        }
     }
     s_last_ff_offset = off;
     s_last_ff_time   = esp_timer_get_time();

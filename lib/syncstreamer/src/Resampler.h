@@ -19,8 +19,8 @@ struct resampler_t {
     int16_t prev[2];        // last consumed frame [L, R]
     float   amplitude;      // crossfade amplitude 0.0–1.0 for gap concealment
     float   rate_ppm_filtered;  // lowpass-filtered rate for smooth phase steps
-    int32_t conceal_phase;  // >0 = fading out (counts 1..CONCEAL_FADE_FRAMES),
-                            // <0 = fading in  (counts -1..-CONCEAL_FADE_FRAMES),
+    int32_t conceal_phase;  // >0 = currently concealing (rising = fade-out,
+                            //        falling = fade-in via Hann window),
                             //  0 = not concealing
 };
 
