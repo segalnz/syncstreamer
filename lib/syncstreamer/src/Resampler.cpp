@@ -55,7 +55,6 @@ void resampler_init(resampler_t* rs)
     rs->prev[0]           = 0;
     rs->prev[1]           = 0;
     rs->amplitude         = 1.0f;
-    rs->rate_ppm_filtered = 0.0f;
     rs->conceal_phase     = 0;
     g_dropout_frames      = 0;
 }
@@ -63,10 +62,7 @@ void resampler_init(resampler_t* rs)
 bool resampler_get_frame(resampler_t* rs, int16_t* out_l, int16_t* out_r)
 {
     // Copy volatile g_rate_ppm once to avoid torn reads from sync_task preemption.
-    float target_ppm = g_rate_ppm;
-    // Slow IIR: alpha = 0.0007 → τ ≈ 30 ms at 48 kHz
-    rs->rate_ppm_filtered += (target_ppm - rs->rate_ppm_filtered) * 0.0007f;
-    rs->phase += 1.0f + rs->rate_ppm_filtered * 1e-6f;
+    rs->phase += 1.0f + g_rate_ppm * 1e-6f;
 
     bool valid = true;
 
