@@ -54,8 +54,8 @@ static void pll_update(void)
 
     g_filtered_err = 0.85f * g_filtered_err + 0.15f * err;
 
-    // Feed-forward term: instantaneous PPM from server clock offset drift.
-    int64_t off    = g_offset_us;
+    // Feed-forward term: instantaneous PPM from relative offset drift.
+    int64_t off    = offset_drift_us();
     int64_t dt_us  = esp_timer_get_time() - s_last_ff_time;
     if (dt_us > 0 && dt_us < 500000) {
         float inst_ppm = (float)(off - s_last_ff_offset) * 1e6f / (float)dt_us;
