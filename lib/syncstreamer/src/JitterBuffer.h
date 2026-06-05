@@ -40,6 +40,7 @@ bool jb_init(void);
 void jb_write(uint32_t frame_seq, const int16_t pcm[2]);
 
 // Write all 256 frames from a SyncPacket at once. Takes mutex once.
+// Per-frame sliding-window guard protects against ring wrap.
 void jb_write_packet(uint32_t base_frame, const int16_t pcm[512]);
 
 // Peek at the frame at read_head without advancing. Returns pointer into ring

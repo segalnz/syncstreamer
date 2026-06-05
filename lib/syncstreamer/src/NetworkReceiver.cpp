@@ -35,7 +35,7 @@ void wifi_rx_task(void* pvParam)
 
     struct timeval tv = { .tv_sec = 0, .tv_usec = 200000 };
     lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    int rcvbuf = 65536;
+    int rcvbuf = 131072;  // ~677ms of audio buffering
     lwip_setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
 
     struct sockaddr_in addr{};

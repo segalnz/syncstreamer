@@ -9,7 +9,7 @@
 // AudioOutput v2 — ESP-IDF I2S v5 driver for PCM5102A
 //
 // Clock runs CONTINUOUSLY from audio_out_init(). Never stop/restart it.
-// Mute/unmute is done via XSMT pin only (GPIO10).
+// XSMT is tied to 3.3V — mute/unmute handled by I2S zeros.
 //
 // audio_out_task() must be created on Core 1, priority 22.
 // It calls resampler_get_frame() when LOCKED/RECOVERING,
@@ -20,7 +20,6 @@
 #define AO_PIN_BCLK   15
 #define AO_PIN_LRCLK  16
 #define AO_PIN_DOUT   17
-#define AO_PIN_XSMT   10   // active-high: HIGH = unmuted
 
 // ── I2S config ────────────────────────────────────────────────
 #define AO_SAMPLE_RATE   48000u
@@ -30,14 +29,14 @@
 // Shared I2S channel handle (used by audio_out_task internally).
 extern i2s_chan_handle_t g_i2s_tx;
 
-// Initialise I2S driver, configure channel, start clock, unmute DAC.
+// Initialise I2S driver, configure channel, start clock.
 // Returns false on error. Must be called before creating audio_out_task.
 bool audio_out_init(void);
 
-// Mute DAC by driving XSMT low. Zeros already flowing through DMA.
+// Mute — I2S zeros handle silence.
 void audio_out_mute(void);
 
-// Unmute DAC by driving XSMT high.
+// Unmute — I2S resumes audio.
 void audio_out_unmute(void);
 
 // FreeRTOS task body. Pin to Core 1, priority 22.

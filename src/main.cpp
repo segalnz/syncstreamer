@@ -3,7 +3,8 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiUdp.h>
+#include <lwip/sockets.h>
+#include <arpa/inet.h>
 #include <ESPAsyncWebServer.h>
 
 #include "secrets.h"          // WIFI_SSID, WIFI_PASSWORD
@@ -25,24 +26,46 @@ static void send_announce()
 {
     if (WiFi.status() != WL_CONNECTED) return;
 
-    // endPacket() returns 0 (error 12 / ENOMEM) if the lwIP UDP stack is not
-    // yet fully ready — happens at boot AND after every reconnect.  Retry with
-    // a short back-off so all callers (boot, periodic keepalive, post-reconnect)
-    // are covered without needing a delay at the call site.
-    WiFiUDP udp;
+    struct sockaddr_in dest{};
+    dest.sin_family = AF_INET;
+    dest.sin_port   = htons(ANNOUNCE_PORT);
+    if (inet_aton(SERVER_HOST, &dest.sin_addr) == 0) {
+        log_e("Announce: inet_aton failed for %s", SERVER_HOST);
+        return;
+    }
+
+    int sock = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) {
+        log_e("Announce: socket() failed");
+        return;
+    }
+
+    int reuse = 1;
+    lwip_setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
     for (int attempt = 1; attempt <= 5; ++attempt) {
-        udp.beginPacket(SERVER_HOST, ANNOUNCE_PORT);
-        udp.write(reinterpret_cast<const uint8_t*>("SYNC_HELLO"), 10);
-        if (udp.endPacket()) {
-            log_i("Announce → %s:%d  (our IP: %s, attempt %d)",
-                  SERVER_HOST, ANNOUNCE_PORT,
-                  WiFi.localIP().toString().c_str(), attempt);
+        int n = lwip_sendto(sock, "SYNC_HELLO", 10, 0,
+                            (struct sockaddr*)&dest, sizeof(dest));
+        if (n == 10) {
+            log_i("Announce -> %s:%d (attempt %d)", SERVER_HOST, ANNOUNCE_PORT, attempt);
+            lwip_close(sock);
             return;
         }
-        log_w("Announce: endPacket failed (attempt %d/5)", attempt);
-        delay(250);
+        log_w("Announce: lwip_sendto failed (attempt %d/5)", attempt);
+        if (attempt < 5) delay(250);
     }
+
+    lwip_close(sock);
     log_e("Announce: gave up after 5 attempts");
+}
+
+// ── Announce task (periodic SYNC_HELLO keep-alive) ───────────────────────────
+static void announce_task(void* arg) {
+    TickType_t xLastWake = xTaskGetTickCount();
+    for (;;) {
+        vTaskDelayUntil(&xLastWake, pdMS_TO_TICKS(30000));
+        send_announce();
+    }
 }
 
 // ── WiFi ──────────────────────────────────────────────────────────────────────
@@ -101,6 +124,7 @@ void setup()
     xTaskCreatePinnedToCore(ctrl_rx_task,   "ctrl_rx",   4096, nullptr, 16, nullptr, 0);
     xTaskCreatePinnedToCore(audio_out_task, "audio_out", 4096, nullptr, 22, nullptr, 1);
     xTaskCreatePinnedToCore(sync_task,      "sync_ctrl", 4096, nullptr, 15, nullptr, 0);
+    xTaskCreatePinnedToCore(announce_task,  "announce", 4096, nullptr,  5, nullptr, 0);
 
     log_i("setup() complete — tasks running");
 }
@@ -118,15 +142,8 @@ void loop()
         }
     }
 
-    // ElegantOTA keepalive + MQTT publish
-    status_server_loop(&server);
-
-    // Re-announce to server every 30 s so it keeps this client in its list.
-    static uint32_t s_last_announce = 0;
-    if (millis() - s_last_announce >= 30000) {
-        s_last_announce = millis();
-        send_announce();
-    }
+    // Disabled: MQTT/HTTP/ElegantOTA compete with audio UDP for lwIP buffers.
+    // status_server_loop(&server);
 
     delay(10);
 }

@@ -1,18 +1,9 @@
 #include "AudioOutput.h"
+#include "SyncController.h"
 #include "JitterBuffer.h"
+#include "Resampler.h"
 #include <Arduino.h>
 #include <string.h>
-
-// Forward declarations — defined in SyncController.cpp / Resampler.cpp
-extern "C" {
-    typedef enum { ST_IDLE, ST_ACQUIRING, ST_LOCKED, ST_RECOVERING, ST_REACQUIRING } client_state_t;
-    extern volatile client_state_t g_state;
-    extern volatile bool           g_muted;
-}
-// Resampler forward — avoids circular include
-struct resampler_t;
-extern resampler_t g_resampler;
-extern bool resampler_get_frame(resampler_t* rs, int16_t* out_l, int16_t* out_r);
 
 // ── Global I2S channel handle ─────────────────────────────────────────────────
 i2s_chan_handle_t g_i2s_tx = nullptr;
@@ -65,18 +56,9 @@ bool audio_out_init(void)
     return true;
 }
 
-// ── Mute / Unmute (XSMT pin for PCM5102A) ─────────────────────────────────────
-void audio_out_mute(void)
-{
-    digitalWrite(AO_PIN_XSMT, LOW);
-    g_muted = true;
-}
-
-void audio_out_unmute(void)
-{
-    digitalWrite(AO_PIN_XSMT, HIGH);
-    g_muted = false;
-}
+// ── Mute / Unmute (I2S zeros handle silence) ──────────────────────────────────
+void audio_out_mute(void)   { g_muted = true; }
+void audio_out_unmute(void) { g_muted = false; }
 
 // ── audio_out_task ────────────────────────────────────────────────────────────
 // Core 1, priority 22. Fills one DMA buffer per iteration from resampler or zeros.
@@ -91,8 +73,8 @@ void audio_out_task(void* pvParam)
             for (uint32_t i = 0; i < AO_DMA_FRAMES; i++) {
                 int16_t l = 0, r = 0;
                 resampler_get_frame(&g_resampler, &l, &r);
-                s_dma_buf[i * 2]     = l;
-                s_dma_buf[i * 2 + 1] = r;
+                s_dma_buf[i * 2]     = (int16_t)(l * 0.89f);  // −1 dB headroom for DAC intersample overs
+                s_dma_buf[i * 2 + 1] = (int16_t)(r * 0.89f);
             }
         } else {
             memset(s_dma_buf, 0, sizeof(s_dma_buf));

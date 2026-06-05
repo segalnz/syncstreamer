@@ -69,23 +69,21 @@ void jb_write(uint32_t frame_seq, const int16_t pcm[2])
 
 void jb_write_packet(uint32_t base_frame, const int16_t pcm[512])
 {
-    // Sliding-window guard: check base frame against read head.
-    uint32_t dist = base_frame - s_read_head;
-    if (dist >= JB_FRAMES) {
-        s_read_head = base_frame - (JB_FRAMES - 1);
-    }
-
     xSemaphoreTake(s_mutex, portMAX_DELAY);
 
     for (uint32_t i = 0; i < 256; i++) {
         uint32_t seq  = base_frame + i;
         uint32_t idx  = seq & JB_MASK;
+
+        uint32_t dist = seq - s_read_head;
+        if (dist >= JB_FRAMES) {
+            s_read_head = seq - (JB_FRAMES - 1);
+        }
+
         s_ring[idx].pcm[0] = pcm[i * 2];
         s_ring[idx].pcm[1] = pcm[i * 2 + 1];
         __sync_synchronize();
         s_ring[idx].valid  = true;
-
-        // Write head is always one past the highest frame_seq written.
         s_write_head = seq + 1u;
     }
 

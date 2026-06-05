@@ -40,6 +40,8 @@ void on_duck_start(void) { g_ducked = true; }
 void on_duck_end(void)   { g_ducked = false; }
 
 // ── PLL update (called each tick) ────────────────────────────────────────────
+static bool s_pll_seeded = false;
+
 static void pll_update(void)
 {
     // ── Feed-forward from clock offset drift ──────────────────────────────
@@ -51,6 +53,13 @@ static void pll_update(void)
     static int64_t s_last_offset  = 0;
     static int64_t s_last_tick_us = 0;
     static float   s_ff_ppm       = 0.0f;
+
+    if (!s_pll_seeded) {
+        s_last_offset  = offset_drift_us();
+        s_last_tick_us = esp_timer_get_time();
+        s_ff_ppm       = 0.0f;
+        s_pll_seeded   = true;
+    }
 
     int64_t off   = offset_drift_us();
     int64_t now   = esp_timer_get_time();
@@ -122,6 +131,7 @@ static void state_machine_tick(void)
             resampler_init(&g_resampler);
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
+            s_pll_seeded = false;
             g_state = ST_ACQUIRING;
             log_i("SyncCtrl: IDLE → ACQUIRING");
         }
@@ -149,6 +159,7 @@ static void state_machine_tick(void)
             resampler_init(&g_resampler);
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
+            s_pll_seeded = false;
             g_state = ST_REACQUIRING;
             log_w("SyncCtrl: LOCKED → REACQUIRING (occ=%u, stall=%d)", occ, stall);
         } else if (occ < lo || occ > hi) {
@@ -165,6 +176,7 @@ static void state_machine_tick(void)
             resampler_init(&g_resampler);
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
+            s_pll_seeded = false;
             g_state = ST_REACQUIRING;
             log_w("SyncCtrl: RECOVERING → REACQUIRING (occ=%u, stall=%d)", occ, stall);
         } else if (occ >= lo && occ <= hi) {
@@ -178,6 +190,7 @@ static void state_machine_tick(void)
             audio_out_unmute();
             g_filtered_err = 0.0f;
             g_rate_ppm = 0.0f;
+            s_pll_seeded = false;
             g_state = ST_LOCKED;
             log_i("SyncCtrl: REACQUIRING → LOCKED (occ=%u frames)", occ);
         } else if (stall) {
