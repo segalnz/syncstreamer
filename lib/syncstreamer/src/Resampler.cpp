@@ -12,8 +12,8 @@ extern volatile float g_rate_ppm;
 //
 // For gaps shorter than 480 frames the cosine never reaches 0 before valid
 // data returns, so the fade is naturally proportional to the gap duration.
-// For gaps >= 480 frames the amplitude reaches 0 and stays there.
-#define CONCEAL_FADE_FRAMES     480u    // ~10 ms at 48 kHz
+// For gaps >= 960 frames the amplitude reaches 0 and stays there.
+#define CONCEAL_FADE_FRAMES     960u    // ~20 ms at 48 kHz
 #define CONCEAL_LUT_ENTRIES     256u    // LUT size for raised-cosine
 
 // Precomputed raised-cosine LUT:  lut[i] = 0.5 * (1 + cos(pi * i / ENTRIES))

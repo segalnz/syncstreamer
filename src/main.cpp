@@ -123,7 +123,7 @@ void setup()
     xTaskCreatePinnedToCore(wifi_rx_task,   "wifi_rx",   8192, nullptr, 18, nullptr, 0);
     xTaskCreatePinnedToCore(ctrl_rx_task,   "ctrl_rx",   4096, nullptr, 16, nullptr, 0);
     xTaskCreatePinnedToCore(audio_out_task, "audio_out", 4096, nullptr, 22, nullptr, 1);
-    xTaskCreatePinnedToCore(sync_task,      "sync_ctrl", 4096, nullptr, 15, nullptr, 0);
+    xTaskCreatePinnedToCore(sync_task,      "sync_ctrl", 4096, nullptr, 15, nullptr, 1);
     xTaskCreatePinnedToCore(announce_task,  "announce", 4096, nullptr,  5, nullptr, 0);
 
     log_i("setup() complete — tasks running");
